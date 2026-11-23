@@ -1,0 +1,2808 @@
+# BinoView Scripts
+
+> Песочница скриптов суперграфиков BinoView: JavaScript-модуль для lightweight-charts v5 с индикаторами, сигналами buy/sell для автоторговли и HUD-карточкой над графиком. Оглавление для ИИ-ассистента, который пишет скрипт по просьбе трейдера.
+
+Серверный бот раздела «Автоторговля» (defineBot) пишется по другой справке: https://binoview.io/docs/bots/llms.txt
+
+Как пользоваться: открой по ссылкам «Контракт модуля» и «Правила и ловушки» целиком, потом разделы под задачу и один ближайший пример. Ответ: одна строка переформулировки задачи, затем весь скрипт одним блоком кода. Не выдумывай методы: код прогоняется через smoke-тест и линтер («Проверка кода»). Если страницы не открылись, скажи трейдеру и соблюдай минимальный контракт ниже. Версия рантайма: 14.
+
+## Минимальный контракт
+
+- `init(ctx)` обязан вернуть объект `{ update(candles) }`. Отдельный `export function update` не работает.
+- `update` получает весь массив свечей на каждый вызов: индикаторы создавай внутри `update` через `new ctx.TA.X(...)`, серии заполняй полным `setData`, состояние между вызовами не копи. Минимум истории `meta.minBars` (число или `(p) => число`): пока свечей меньше, `update` не зовется.
+- Сигнал это маркер с `name: "buy"` или `"sell"` и `time` последней свечи; без `name` сигнала нет. Маркеры верни из `update` и нарисуй сам: `createSeriesMarkers(candleSeries, []).setMarkers(markers)`.
+- Ключи `_hud*` в `meta` не объявляй, их добавляет рантайм. Свои параметры карточки только в `hud.defaultParams` и `hud.paramMeta`.
+- `hud.anchor` только `"TR"`, `"TL"`, `"BR"`, `"BL"`, по умолчанию `"TR"`. Кнопки: `pointerEvents: "auto"` в объекте `hud` и подписка `ctx.hud.on("click", '[data-action="x"]', handler)` в `init`, не в `render`.
+- Запрещены таймеры, `window`, `document`, `fetch`, `localStorage`. `destroy` не пиши, рантайм чистит сам. Цвета по умолчанию `#RRGGBB` или `rgba(...)`.
+- Время, таймфрейм, пара и доходность только из `ctx.time` и `ctx.market`, не из `Date` и не из разницы свечей. Свечи другого таймфрейма только через `meta.timeframes` и `ctx.bars(tf)`, не сверткой.
+
+## Каркас, который проходит проверку
+
+```javascript
+export const meta = {
+  name: "Мой скрипт",
+  pane: "main",             // "main" | "separate"
+  minBars: (p) => p.period,
+  defaultParams: { period: 20, color: "#22c55e" },
+  paramMeta: {
+    period: { label: "Период", type: "number", min: 2, max: 200 },
+    color:  { label: "Цвет",   type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { candleSeries, addSeries, LineSeries, params, TA, createSeriesMarkers } = ctx;
+  const line = addSeries(LineSeries, { color: params.color, lineWidth: 2 });
+  const markersApi = createSeriesMarkers(candleSeries, []);
+  return {
+    update(candles) {
+      const ema = new TA.EMA(params.period);
+      const data = [], markers = [];
+      for (const c of candles) {
+        const v = ema.add(c.close);
+        if (ema.isStable) data.push({ time: c.time, value: v });   // прогрев
+      }
+      line.setData(data);
+      markersApi.setMarkers(markers);
+      return markers;   // [{ name: "buy", time, price, position: "belowBar", shape: "arrowUp", color, text }]
+    }
+  };
+}
+```
+
+## Начни отсюда
+
+- [Контракт модуля](https://binoview.io/docs/scripts/contract.md): экспорты meta, init(ctx), hud; update(candles); все поля ctx; свеча, time в секундах
+- [Правила и ловушки](https://binoview.io/docs/scripts/rules.md): запреты песочницы, парсер, ловушки «компилируется, но работает неверно», формат ответа
+- [Выбор панели](https://binoview.io/docs/scripts/pane.md): main или separate по типу индикатора, priceScaleId
+
+## Справочник
+
+- [Параметры](https://binoview.io/docs/scripts/params.md): defaultParams и paramMeta, типы number, boolean, color, select, text
+- [Индикаторы TA](https://binoview.io/docs/scripts/ta.md): trading-signals через ctx.TA, прогрев через null и isStable
+- [Сигналы и экспирация](https://binoview.io/docs/scripts/markers.md): формат маркера buy/sell, cooldown, adaptiveExpiration для автоторговли
+- [HUD-карточка](https://binoview.io/docs/scripts/hud.md): export const hud, render(state, html, env), css, anchor, ctx.hud.set из update, параметры _hud*
+- [Кнопки в HUD](https://binoview.io/docs/scripts/hud-buttons.md): ctx.hud.on, pointerEvents "auto", data-action
+- [Несколько HUD-карточек](https://binoview.io/docs/scripts/hud-cards.md): до четырех карточек, ctx.hud.set({ card: state }), ключи _hud.<card>.*
+- [Серии и уровни](https://binoview.io/docs/scripts/series.md): addSeries, LineSeries и HistogramSeries, уровень через createPriceLine
+- [Pane Primitives](https://binoview.io/docs/scripts/primitives.md): три класса, координаты по своим точкам
+- [Рынок и время](https://binoview.io/docs/scripts/market.md): ctx.market (пара, OTC, доходность, digits), ctx.time (tf, часы брокера, час и день в поясе графика), ctx.fmt
+- [Другие таймфреймы](https://binoview.io/docs/scripts/timeframes.md): meta.timeframes до трех, ctx.bars(tf) родные свечи той же пары, bars.indexAt
+- [Проверка кода](https://binoview.io/docs/scripts/lint.md): smoke-тест и живой прогон, коды code-*, live-*, валидаторов, как читать ошибку
+
+## Примеры
+
+- [EMA на свечах](https://binoview.io/docs/scripts/examples/ema.md): одна линия, прогрев
+- [Пересечение SMA с сигналами](https://binoview.io/docs/scripts/examples/sma-cross.md): маркеры buy/sell, cooldown
+- [RSI Signal Bot](https://binoview.io/docs/scripts/examples/rsi-signal.md): сигналы по выходу из зон 30/70
+- [Streak Reversal](https://binoview.io/docs/scripts/examples/streak-buy.md): контртренд после N свечей
+- [RSI на отдельной панели](https://binoview.io/docs/scripts/examples/rsi.md): pane separate
+- [RSI с HUD-карточкой](https://binoview.io/docs/scripts/examples/rsi-hud.md): состояние индикатора в карточке
+- [Счетчик с кнопками в HUD](https://binoview.io/docs/scripts/examples/hud-buttons.md): ctx.hud.on, «Пауза» и «Сброс»
+- [Две карточки HUD](https://binoview.io/docs/scripts/examples/hud-cards.md): две карточки друг под другом, свои параметры
+- [Бот с адаптивной экспирацией](https://binoview.io/docs/scripts/examples/adaptive-bot.md): экспирация из скрипта, догоны
+- [MACD](https://binoview.io/docs/scripts/examples/macd.md): гистограмма и линии на отдельной панели
+- [Bollinger Bands](https://binoview.io/docs/scripts/examples/bollinger.md): три линии на графике
+- [Bollinger Bands с заливкой](https://binoview.io/docs/scripts/examples/bollinger-fill.md): заливка между линиями
+- [Уровень открытия дня](https://binoview.io/docs/scripts/examples/price-line.md): уровень через createPriceLine
+- [EMA Cross по сессии](https://binoview.io/docs/scripts/examples/session-filter.md): фильтр по часам, доходности и OTC
+- [Объем](https://binoview.io/docs/scripts/examples/volume-guard.md): BinoDex и OTC
+- [EMA Cross по трем таймфреймам](https://binoview.io/docs/scripts/examples/mtf-trend.md): три ТФ как select, голоса трендов, доска в HUD
+- [Младший ТФ внутри свечи](https://binoview.io/docs/scripts/examples/mtf-inside.md): бары S5 внутри формирующейся свечи, HUD
+
+## Optional
+
+- [Полная справка одним файлом](https://binoview.io/llms-full.txt): все страницы
+- [Что нового в API](https://binoview.io/docs/scripts/changelog.md): изменения по датам
+
+
+---
+<!-- https://binoview.io/docs/scripts/contract.md -->
+
+# Контракт модуля
+
+> Источник правды: app/utils/tw-scripts/runtime.js (compileUserScript, initCompiledScript), app/utils/tw-scripts/minBars.js, app/utils/tw-scripts/cooldown.js, app/composables/useChartScripts.js. Версия рантайма: 14.
+
+Что скрипт экспортирует, что лежит в ctx, когда и с чем рантайм зовет update.
+
+## Три экспорта
+
+- `meta` обязателен: описание скрипта и параметров.
+- `init(ctx)` обязателен: создает серии, маркеры, примитивы и возвращает `{ update(candles) }`.
+- `hud` опционален: карточка над графиком, https://binoview.io/docs/scripts/hud.md.
+
+```javascript
+export const meta = {
+  name: "Название",
+  pane: "main",                       // "main" | "separate"
+  minBars: (p) => p.period,           // update не зовется, пока свечей меньше
+  cooldown: 2,                        // баров без сигналов после каждого сигнала
+  defaultParams: { period: 14, color: "#22c55e" },
+  paramMeta: {
+    period: { label: "Период", type: "number", min: 2, max: 200 },
+    color:  { label: "Цвет",   type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { addSeries, LineSeries, params, TA } = ctx;
+  const line = addSeries(LineSeries, { color: params.color, lineWidth: 2 });
+  return {
+    update(candles) {
+      // пересчет от всего массива, полный line.setData(...)
+      return [];
+    }
+  };
+}
+```
+
+## Формы экспорта, которые понимает парсер
+
+Парсер переписывает ESM регулярками, допустимы только `export const meta = {...}` (также let/var), `export const hud = {...}`, `export function init(ctx) {...}`, `export const init = (ctx) => ({...})`, `export default function init(ctx) {...}`, `export { meta, init }` и `export default { meta, init }` для имен, объявленных выше. Имена фиксированы: `meta` (legacy `scriptMeta`, `botMeta`), `init` (или `initFn`), `hud`. Другие имена: «В модуле не найдены botMeta/scriptMeta/meta и init/initFn»; другие формы (`export default meta`): «Unexpected token 'export'». `import` не поддерживается.
+
+## Поля meta
+
+- `name`: название в списке скриптов; им же рантайм подписывает отдельную панель. Пустое: замечание meta-name-missing.
+- `pane`: `"main"` или `"separate"`. Не задан: main. Другое значение: замечание meta-pane-invalid и main. Выбор: https://binoview.io/docs/scripts/pane.md.
+- `defaultParams`: значения по умолчанию всех параметров.
+- `paramMeta`: описание полей настроек, см. https://binoview.io/docs/scripts/params.md.
+- `minBars`: с какого числа свечей звать `update`: число или функция `(params) => число`, например `(p) => p.slow + 1`, не больше 1050 (история графика). Пока свечей меньше, `update` не вызывается: серии и маркеры пустые, сигналов нет. Готовность TA (`null`, `isStable`) это не заменяет. Не число или больше истории: ошибка в фазе init.
+- `cooldown`: пауза между сигналами в барах, число или `(params) => число`, 0..1050: сигналы в паузе рантайм убирает из `setMarkers` и возврата `update`. См. https://binoview.io/docs/scripts/markers.md.
+- `adaptiveExpiration: true`: скрипт задает время сделки полем `expiration` маркера; без флага источник экспирации «Из скрипта» в окне автоторговли недоступен. См. https://binoview.io/docs/scripts/markers.md.
+- `timeframes`: свечи других таймфреймов пары через `ctx.bars(tf)`: массив имен или секунд (до 3, `["M15"]`, `[900]`) либо `(params) => [...]`. См. https://binoview.io/docs/scripts/timeframes.md.
+
+## Объект ctx
+
+В `init(ctx)` приходят ключи:
+
+- `chart`: IChartApi lightweight-charts v5 (прокси: `addSeries`, `panes()`, `addPane` отслеживаются).
+- `candleSeries`: серия свечей основной панели: `createSeriesMarkers`, `createPriceLine`, `attachPrimitive`.
+- `paneIndex`: 0 для main, номер новой панели для separate; третий аргумент `addSeries`.
+- `params`: `{ ...defaultParams, ...настройки пользователя }`, приведенные к типам из paramMeta. Здесь же параметры HUD.
+- `isDark`: `{ value: boolean }`, реактивный: читай `isDark.value`, голый `isDark` всегда truthy.
+- `TA`: trading-signals, см. https://binoview.io/docs/scripts/ta.md.
+- `createSeriesMarkers(series, [])`: api с `setMarkers`.
+- `addSeries(Type, options, paneIndex)`: ISeriesApi, см. https://binoview.io/docs/scripts/series.md.
+- `attachPrimitive(series, primitive)`: то же, что `series.attachPrimitive(primitive)`. См. https://binoview.io/docs/scripts/primitives.md.
+- `hud`: `{ set(state), on(event, selector, handler), off(selector) }`. Без `export const hud` это пустые заглушки. Несколько карточек: `set({ card: state })`, см. https://binoview.io/docs/scripts/hud-cards.md.
+- `LineSeries`, `HistogramSeries`: типы серий.
+- `market`, `time`, `fmt`: пара, OTC, доходность и digits; таймфрейм и его имя, часы брокера, час и день в поясе шкалы графика; форматирование цены и времени. См. https://binoview.io/docs/scripts/market.md.
+- `bars(tf)`: свечи таймфрейма из `meta.timeframes`, `bars.indexAt(tf, t)` индекс последнего бара, закрытого к `t`. См. https://binoview.io/docs/scripts/timeframes.md.
+
+## Свеча
+
+`{ time, open, high, low, close, volume }`. `time` это Unix-время начала бара в секундах, не в миллисекундах; таймфрейм в секундах это `ctx.time.tf`. `volume` от брокера как есть: у BinoDex всегда 0, на OTC синтетический; объемная логика только при `ctx.market.hasVolume`.
+
+## Когда зовется update(candles)
+
+1. Сразу после `init`. Ошибка снимает скрипт с графика и показывает тост.
+2. На каждом тике котировки, не чаще раза в ~2 с.
+3. Тихий прогон через 50-350 мс после закрытия бара, уже с новой свечой, без сигналов.
+4. Тихий перепрогон после показа запаркованного графика.
+5. Синхронный прогон на закрытом баре для скрипта, за которым следит автоторговля в режиме «следующая свеча».
+6. При смене пары или таймфрейма инстанс уничтожается и создается заново.
+
+Каждый раз приходит весь массив свечей от начала истории; последняя свеча формирующаяся: между вызовами меняются ее close/high/low при том же `time`.
+
+Контракт: каждый `update` пересчитывает все от `candles` и делает полный `series.setData(...)` и `markersApi.setMarkers(...)`: на запаркованном графике рантайм глотает рисование, а при показе перепрогоняет `update` и ждет полной картины; инкрементальный `series.update(bar)` оставил бы дыру. Статика из `init` (createPriceLine, легенда HUD) парковку переживает.
+
+Состояние между вызовами не копи: https://binoview.io/docs/scripts/rules.md.
+
+## Что возвращает update
+
+Массив маркеров или `[]`. Рантайм читает только `name` (`"buy"` | `"sell"`), `time`, `price`, `expiration`; сигнал засчитывается, когда `time` равен времени последней свечи, не чаще раза на бар. Рисует маркеры сам скрипт: `markersApi.setMarkers(markers)`. Формат: https://binoview.io/docs/scripts/markers.md.
+
+## Авто-очистка: destroy не пиши
+
+Все, что создано через ctx (серии, панели, маркеры, примитивы, HUD, `createPriceLine`, `autoscaleInfoProvider`), рантайм снимает сам при удалении скрипта. Возвращай из `init` только `update`: `destroy` дает code-destroy-in-init-return.
+
+
+---
+<!-- https://binoview.io/docs/scripts/rules.md -->
+
+# Правила и ловушки
+
+> Источник правды: app/utils/tw-scripts/runtime.js (SANDBOX_BLOCKED_NAMES, compileUserScript), shared/scriptValidationPatterns.js, shared/scriptCodeLinter.js, app/utils/tw-scripts/smokeTest.js. Версия рантайма: 14.
+
+Запреты и доступное в песочнице, ограничения парсера, ловушки, формат ответа.
+
+## Запрещено в песочнице
+
+Любое обращение к этим именам (вызов или чтение свойства) бросает `[Sandbox] Доступ запрещен: <имя>`: в проверке фаза init или update, на графике тост.
+
+```
+Function setTimeout setInterval setImmediate clearTimeout clearInterval
+requestAnimationFrame cancelAnimationFrame requestIdleCallback cancelIdleCallback
+WebSocket Worker SharedWorker ServiceWorker importScripts
+document window globalThis self top parent frames navigator location history
+indexedDB caches crypto performance Notification AudioContext webkitAudioContext
+RTCPeerConnection EventSource BroadcastChannel MessageChannel Proxy Reflect Symbol
+queueMicrotask AbortController AbortSignal structuredClone TextEncoder TextDecoder atob btoa
+Blob File FileReader URL URLSearchParams FormData Headers Request Response
+ReadableStream WritableStream TransformStream CompressionStream DecompressionStream
+MutationObserver ResizeObserver IntersectionObserver Image Option postMessage Intl
+```
+
+Также заблокированы `eval`, `fetch`, `XMLHttpRequest`, `localStorage`, `sessionStorage` и свойство `constructor` у функций (`fn.constructor`, обходной путь к `Function`).
+
+Следствия: таймеров нет, `update` синхронный; сети и хранилищ нет; `Intl` нет, форматируй через `ctx.fmt`.
+
+## Статические запреты на компиляции
+
+Регулярки до запуска, сервер повторяет их при сохранении; текст начинается с `[Sandbox]`. Запрещены: динамический `import()`, `import.meta`, `__proto__`, `__defineGetter__`/`__defineSetter__`/`__lookupGetter__`/`__lookupSetter__`, `.constructor.constructor`, `.constructor[...]`.
+
+## Доступно
+
+`Math`, `console` (log, info, warn, error), `Date`, `JSON`, `Map`, `Set`, `WeakMap`, `Promise`, `Object`, `Array`, `Number`, `String`, `Boolean`, `BigInt`, `RegExp`, `Error`, типизированные массивы, `parseInt`/`parseFloat`, async/await. `alert()` подменен на `console.warn`. Промисы работают, но результат `update` нужен сразу: считай синхронно. Индикаторы только через `ctx.TA`, графика только через ctx.
+
+## Ограничения парсера
+
+- Только формы export из https://binoview.io/docs/scripts/contract.md; имена экспортов фиксированы (meta, init, hud), остальные идентификаторы любые.
+- Любой `import ... from`: «Cannot use import statement outside a module». Внешних библиотек нет.
+
+## Ловушки: компилируется, но работает неверно
+
+1. **Состояние в замыкании init, мутируемое из update.** `update` каждые ~2 с получает весь массив свечей, поэтому `let wins = 0` в init и `wins++` в update считают неверно. Линтер: code-init-mutable-state. Считай статистику внутри update от `candles`. В замыкании держи только серии, примитивы и состояние обработчиков `ctx.hud.on` (https://binoview.io/docs/scripts/examples/hud-buttons.md).
+2. **Неиспользуемые параметры.** Каждый ключ paramMeta должен читаться в коде, иначе ручка без эффекта. Линтер: code-paramMeta-unused.
+3. **Горизонтальный уровень** это `candleSeries.createPriceLine({ price, color, lineWidth, lineStyle, axisLabelVisible, title })` в init и `line.applyOptions({ price })` в update, не LineSeries и не примитив. Пример https://binoview.io/docs/scripts/examples/price-line.md.
+4. **HUD: state и render должны совпадать.** `undefined`, `null`, `false` рендерятся пустой строкой без ошибки: карточка молча пустеет. `params` в render нет (code-p-in-render), прокидывай нужное через set.
+5. **Не выдумывай API.** Код прогоняется на синтетических свечах (https://binoview.io/docs/scripts/lint.md). Нет `rsi.last()`, `.value`, `series.lastBar()`, `chart.subscribeTick()`, `subscribeCrosshairMove`, `subscribeClick`, `timeScale().subscribe*`: логика только в `update`. TA: `new TA.X(...)`, `.add()`, `.getResult()`, `.isStable` (https://binoview.io/docs/scripts/ta.md); серии: https://binoview.io/docs/scripts/series.md.
+6. **Время и рынок.** `time` свечи это Unix-секунды. Часы брокера, таймфрейм и пояс шкалы графика лежат в `ctx.time` (`now()`, `tf`, `hour(t)`, `barLeft()`), пара, OTC и доходность в `ctx.market`: https://binoview.io/docs/scripts/market.md. `new Date()`, `Date.now()`, `getHours()` это часы устройства, они не совпадают с брокером, линтер code-device-clock. «Сегодня» это `c.time >= ctx.time.dayStart()`.
+7. **Объем.** Только при `ctx.market.hasVolume` (на OTC синтетический, у BinoDex 0), иначе OBV и VWAP молчат: предупреди трейдера.
+8. **Тяжелый код.** `update` идет по всем графикам сетки, фаза проверки ограничена 1.5 с. В `View.update()` примитива не собирай Map по всем свечам и не читай `series.data()`; координаты только по своим точкам через `timeScale().timeToCoordinate(time)` и `series.priceToCoordinate(price)`, `null` это вне экрана. Пример https://binoview.io/docs/scripts/examples/bollinger-fill.md.
+9. **isDark как boolean.** Это `{ value }`, голый `isDark` truthy: code-isDark-as-boolean.
+10. **separate без paneIndex.** Серия ляжет на свечи: code-addSeries-no-paneIndex, см. https://binoview.io/docs/scripts/pane.md.
+11. **Короткая история.** На новой паре свечей меньше периода: `candles[i - n]` дает undefined. Объяви `meta.minBars` (число или `(p) => p.slow + 1`): пока свечей меньше, `update` не зовется, серии и маркеры пустые.
+12. **Свой cooldown.** `let lastSignalIdx` в init это ловушка 1. Объяви `meta.cooldown` (число или `(p) => p.cooldownBars`): сигналы в паузе рантайм уберет и со стрелок, и из возврата. См. https://binoview.io/docs/scripts/markers.md.
+13. **Сигнал только на закрытой свече.** Цикл до предпоследней свечи или `time` предыдущей у маркера: на живую свечу сигнал не попадает, звука и сделок нет (live-signals-only-closed). Считай по предпоследней, маркер на последнюю.
+14. **Свой старший таймфрейм из свечей.** Свертка по N баров ломается на секундных графиках и перерисовывает сигналы (code-manual-resample). Объяви `meta.timeframes` и бери родные бары через `ctx.bars(tf)`: https://binoview.io/docs/scripts/timeframes.md.
+
+## Формат ответа
+
+- Первая строка: переформулировка задачи (панель, слои, сигналы).
+- Затем весь скрипт одним блоком ```javascript: meta, при необходимости hud, init с update. Полный код без многоточий и прозы внутри: трейдер вставит его в редактор, проверка пойдет сама.
+- Не дели код на блоки, не пиши destroy, после блока код не объясняй. Ошибку проверки трейдер пришлет текстом: чини по нему (https://binoview.io/docs/scripts/lint.md).
+
+## Частые ошибки проверки
+
+- `init() не вернул объект с update()`: забыл `return { update }`.
+- `this.short.update is not a function`: `new TA.MACD(12, 26, 9)` с числами; MACD берет три экземпляра EMA или DEMA.
+- `_hud*` в meta.paramMeta: code-hud-prefix-in-meta; параметры HUD кладутся в hud.paramMeta без префикса.
+- Цвет `"red"` при type color: code-color-default-not-hex, нужен `#RRGGBB` или `rgba(r,g,b,a)`.
+- Результаты TA это обычные числа, `Number()` не нужен.
+
+
+---
+<!-- https://binoview.io/docs/scripts/pane.md -->
+
+# Выбор панели
+
+> Источник правды: app/composables/useChartScripts.js (paneIndex, applyPaneLayout), app/utils/tw-scripts/runtime.js (_decorateIndicatorPane), shared/scriptCodeLinter.js (code-addSeries-no-paneIndex). Версия рантайма: 14.
+
+Как выбрать `meta.pane` по типу индикатора, что обязательно для отдельной панели и когда переспрашивать трейдера.
+
+## Два значения
+
+- `"main"`: поверх свечей, `ctx.paneIndex` равен 0.
+- `"separate"`: отдельная панель под графиком. Рантайм заранее кладет в `ctx.paneIndex` номер новой панели; панель появляется при первом `addSeries(..., paneIndex)`. Высота: основная панель 7 частей, каждая отдельная 1.
+- `pane` не задан: main. Другое значение (`"overlay"`, `"bottom"`): замечание meta-pane-invalid и main.
+
+## Таблица выбора
+
+Явные слова трейдера побеждают таблицу.
+
+| Запрос | pane |
+|---|---|
+| «на свечах», «поверх свечей», «на основном графике», `main` | main |
+| «отдельной панелью», «под графиком», «под свечами», «снизу», `separate` | separate |
+| Скользящие и все, что измеряется в ценах: SMA, EMA, WMA, RMA, DEMA, WSMA, SMA15, DMA, Bollinger Bands, VWAP, ZigZag, PSAR, Acceleration Bands, Linear Regression, Ichimoku, уровни поддержки и сопротивления, любые «MA» | main |
+| Осцилляторы и индикаторы в своих единицах: RSI, MACD, Stochastic, Stochastic RSI, ATR, TR, ADX, DX, CCI, Williams %R, AO, AC, CG, REI, MOM, ROC, OBV, Bollinger Bands Width, IQR, MAD, TDS, Period | separate |
+| Сигнальный бот, маркеры buy/sell, стрелки на свечах (сам индикатор без панели) | main |
+| Своя графика на свечах: зоны, заливки, подсветки баров, метки | main |
+
+Индикатор есть в таблице: панель определена, дополнительные фичи (HUD, маркеры, пороги) ее не меняют. Маркеры всегда ложатся на свечи через `createSeriesMarkers(candleSeries, [])`, даже у скрипта с `pane: "separate"`. Не переспрашивай и не оправдывай выбор в ответе.
+
+## Осциллятор на main это не ошибка
+
+Трейдер просит RSI, MACD или Stochastic «на свечах»: это просьба про overlay, а не путаница. Оставь `pane: "main"` и положи серии на свою шкалу, иначе шкала свечей сплющит индикатор в линию у нуля:
+
+```javascript
+const line = addSeries(LineSeries, {
+  color: params.color,
+  priceScaleId: "osc-overlay",   // любое уникальное имя, одно для всех серий индикатора
+  priceLineVisible: false, lastValueVisible: false
+});
+chart.priceScale("osc-overlay").applyOptions({
+  scaleMargins: { top: 0.7, bottom: 0.05 }   // прижать к низу основной панели
+});
+```
+
+Все серии одного индикатора на одной `priceScaleId`, иначе их шкалы разъедутся и пересечения линий визуально не совпадут.
+
+## Что обязательно для separate
+
+- `paneIndex` третьим аргументом в каждом `addSeries`. Без него серия ляжет на свечи, линтер выдаст code-addSeries-no-paneIndex.
+- Все серии индикатора на одном `paneIndex`: одна панель на скрипт.
+- `priceFormat` для малых значений (форекс, MACD): `{ type: "price", precision: 5, minMove: 0.00001 }`, иначе значения вроде 0.00012 округлятся до 0.00. Для RSI и других шкал 0..100 хватает `precision: 2`.
+- Отступы шкалы: `line.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.1 } })`.
+- Рантайм сам подписывает панель именем `meta.name` в углу и прячет ее правую шкалу. Цифр на шкале нет: если трейдеру нужны значения, выводи их в HUD (https://binoview.io/docs/scripts/hud.md).
+- Панель уходит вместе со скриптом: создавать и удалять ее руками не нужно.
+
+Примеры: https://binoview.io/docs/scripts/examples/rsi.md, https://binoview.io/docs/scripts/examples/macd.md.
+
+## Когда уточнять у трейдера
+
+Только если панель действительно неясна:
+
+- запрос пустой или абстрактный: «сделай индикатор», «нарисуй что-нибудь»;
+- индикатора нет в таблице, и в запросе нет слов про панель.
+
+Один короткий вопрос: «На свечах или отдельной панелью?». Во всех остальных случаях выбирай сам и сразу пиши код.
+
+
+---
+<!-- https://binoview.io/docs/scripts/params.md -->
+
+# Параметры
+
+> Источник правды: app/utils/tw-scripts/runtime.js (normalizeParamType, _coerceParams, initCompiledScript), app/utils/tw-scripts/ui.js, app/utils/tw-scripts/sections.js, shared/scriptMetaValidator.js, shared/scriptCodeLinter.js, app/components/tw/EditScriptModal.vue. Версия рантайма: 14.
+
+Как объявлять настройки скрипта в `meta.defaultParams` и `meta.paramMeta`, что из них рисует окно настроек и в каком виде значения приходят в `ctx.params`.
+
+## Два объекта
+
+- `defaultParams`: плоский объект «ключ: значение по умолчанию».
+- `paramMeta`: описание ручки для ключа: `{ label, type, ...доп. поля }`. Окно настроек рисует только ключи из `paramMeta`.
+- Каждый ключ `paramMeta` должен быть в `defaultParams` (валидатор: info `paramMeta-key-not-in-defaultParams`). Обратное направление не проверяется.
+- `ctx.params` = `{ ...defaultParams, ...значения трейдера }` после коэрсии. Читай `params.period` напрямую.
+
+```javascript
+export const meta = {
+  name: "RSI",
+  pane: "separate",
+  defaultParams: { period: 14, source: "close", showLine: true, color: "#a855f7" },
+  paramMeta: {
+    period:   { label: "Период",   type: "number", min: 2, max: 100 },
+    source:   { label: "Источник", type: "select", options: ["close", "open"] },
+    showLine: { label: "Линия",    type: "boolean" },
+    color:    { label: "Цвет",     type: "color" }
+  }
+};
+```
+
+## Типы
+
+| type | UI | Доп. поля | Значение в params |
+|---|---|---|---|
+| `number` | числовое поле | `min`, `max`, `step` (дробный шаг: `step: 0.1`) | number |
+| `boolean` | переключатель | нет | boolean |
+| `color` | палитра + слайдер прозрачности | нет | `#rrggbb` при alpha = 1, иначе `rgba(r,g,b,a)` |
+| `select` | выпадающий список | `options` (обязателен) | string |
+| `text` | строка | нет | string |
+
+- Алиасы: `int`, `float` = `number`; `switch`, `checkbox` = `boolean`; `string` = `text`. Незнакомый type: warn `paramMeta-type-unknown`, коэрсии нет.
+- `options` у select: массив строк или объектов `{ label, value }`; в params приходит `value`. Без `options`: warn `paramMeta-select-no-options`.
+- `label`: без него info `paramMeta-label-missing`.
+- `text`: поля `placeholder` и `maxLength` UI не рисует, не пиши их.
+
+## Цвет
+
+- Дефолт только `#rgb`, `#rrggbb` или `rgba(r,g,b,a)`. Именованные цвета и `hsl()` ломают пикер: warn `code-color-default-not-hex`.
+- Полупрозрачный дефолт пиши сразу строкой `rgba(...)`, собирать ее из hex руками не нужно. Оба формата понимают lightweight-charts и Canvas.
+- Ориентиры alpha: линии и маркеры 1 (hex); заливки, зоны, облака 0.08..0.15; подсветки баров 0.2..0.35; фон HUD-карточки 0.85..0.95.
+- N перекрывающихся слоев с alpha a дают непрозрачность 1 - (1 - a)^N. При 20 и более зонах держи a не выше 0.08.
+
+## Коэрсия
+
+Рантайм приводит значения к типу из `paramMeta` до вызова `init`:
+
+- number: `Number(v)`; NaN остается как было;
+- boolean: `"false"` и `"0"` становятся false, остальное `Boolean(v)`;
+- color, select, text: `String(v)`.
+
+Не пиши защиту вида `+params.x || 14` или `params.flag === "true"`. Ключи без `paramMeta` и значения null не трогаются. Отключить коэрсию для ключа: `coerce: false` в его `paramMeta`.
+
+## Секции настроек (group)
+
+Окно настроек раскладывает ручки по разделам в таком порядке:
+
+- `inputs`: по умолчанию для всех типов, кроме color;
+- любая другая строка в `group`: свой раздел, имя как есть, разделы в порядке первого появления;
+- `style`: автоматически для `type: "color"`;
+- `hud`: параметры HUD, метку ставит рантайм.
+
+Явный `group: "inputs"` или `group: "style"` переопределяет автодетект. Разделы стоят в этом порядке: в окне настроек скрипта на графике на компьютере столбиком слева, в редакторе скрипта и на телефоне списком, раздел открывается нажатием. Поэтому главные разделы объявляй первыми. Имя раздела до 18 символов (warn `meta-group-label-long`), своих разделов не больше 6 (warn `meta-groups-too-many`), в разделе от 3 ручек (info `meta-group-tiny`). Имя раздела в подписях ручек не повторяй: подпись длиннее 32 символов займет в окне две строки (info `paramMeta-labels-long`). Пример с разделами «Вход» и «Тренд»: https://binoview.io/docs/scripts/examples/mtf-trend.md.
+
+## Параметры HUD
+
+Настройки карточки объявляй в `export const hud`: `hud.defaultParams` + `hud.paramMeta` (та же структура). Рантайм вливает их в `meta` с `group: "hud"` и добавляет системные `_hudVisible`, `_hudAnchor`, `_hudTop`, `_hudRight`, `_hudBottom`, `_hudLeft`, `_hudFontPx`. В коде читай их из того же `ctx.params` без префикса: `params.overbought`. Ключи с префиксом `_hud` сам не объявляй: warn `code-hud-prefix-in-meta` и `hud-paramMeta-reserved-prefix`. Пример: https://binoview.io/docs/scripts/examples/rsi-hud.md, подробности: https://binoview.io/docs/scripts/hud.md.
+
+## Неиспользуемые параметры
+
+Каждый ключ `paramMeta` (в meta и в hud) должен читаться в коде хотя бы раз: `params.x`, `ctx.params.x` или после деструктуризации. Иначе warn `code-paramMeta-unused`: у трейдера появится ручка, которая ничего не меняет. Лишний ключ удаляй из обоих объектов.
+
+## Что проверяется
+
+`validateMeta`: `defaultParams` и `paramMeta` обязаны быть объектами (error), у записи `type` строка из списка выше (warn), у select есть `options` (warn), есть `label` (info), ключ есть в `defaultParams` (info). Замечания валидатора и линтера сохранение не блокируют, блокируют только ошибка компиляции и smoke-тест. Полный список кодов: https://binoview.io/docs/scripts/lint.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/ta.md -->
+
+# Индикаторы TA
+
+> Источник правды: node_modules/trading-signals/dist/index.d.mts (версия 7.4.3), shared/scriptCodeLinter.js (TA_CONSTRUCTORS, правило code-ta-arity-mismatch), app/utils/tw-scripts/runtime.js (ctx.TA). Версия рантайма: 14.
+
+Библиотека `trading-signals` доступна в скрипте как `ctx.TA`. Здесь: потоковая модель, прогрев, объекты результата и таблица всех классов с арностью конструктора.
+
+## Потоковая модель
+
+`update(candles)` получает весь массив свечей, поэтому индикатор создается заново на каждый вызов и прогоняется по всем свечам:
+
+```javascript
+update(candles) {
+  const rsi = new TA.RSI(params.period);
+  const data = [];
+  for (const c of candles) {
+    const v = rsi.add(c.close);          // number | null
+    if (v !== null) data.push({ time: c.time, value: v });
+  }
+  line.setData(data);
+  return [];
+}
+```
+
+- Методы экземпляра: `add(input)`, `replace(input)` (пересчет последнего значения), `getResult()` (последний результат или null), `getResultOrThrow()`, `isStable` (свойство), `getRequiredInputs()`. Методов `.last()`, `.value`, `.current`, `.getValue()` нет.
+- Значения обычные `number`, тип Decimal в 7.4.3 не используется, `Number(...)` не нужен.
+- Не пиши свой SMA, EMA, RSI, MACD или Bollinger через ручные формулы, когда есть класс. MACD собирается из трех скользящих: `new TA.MACD(new TA.EMA(12), new TA.EMA(26), new TA.EMA(9))`, вместо EMA допустим DEMA.
+- Вход «свеча» это объект с полями `high`, `low`, `close` (для OBV и VWAP еще `volume`, для OBV также `open`). Передавай свечу целиком: `atr.add(c)`, не `atr.add(c.close)`.
+- `volume` осмыслен только при `ctx.market.hasVolume`: у BinoDex он всегда 0, на OTC синтетический. Без него OBV и VWAP сигналов не дадут, предупреждай трейдера: https://binoview.io/docs/scripts/examples/volume-guard.md.
+
+## Прогрев
+
+- Большинство классов возвращают `null`, пока не набрали период: проверяй `v !== null`.
+- `EMA`, `RMA`, `DEMA`, `TR` отдают число уже с первого входа. Прогрев у них виден только через `isStable`: пропускай значения, пока `ind.isStable === false`, иначе первые точки линии будут кривыми.
+- Для сигналов на пересечении храни предыдущие значения в локальных переменных цикла, а не в замыкании `init` (см. https://binoview.io/docs/scripts/rules.md).
+
+## Объекты результата
+
+| Класс | Поля |
+|---|---|
+| `MACD` | `{ macd, signal, histogram }` |
+| `BollingerBands`, `AccelerationBands` | `{ upper, middle, lower }` |
+| `StochasticOscillator` | `{ stochK, stochD }` |
+| `DMA` | `{ short, long }` |
+| `LinearRegression` | `{ prediction, slope, intercept }` |
+| `Period` | `{ highest, lowest }` |
+
+Остальные классы возвращают число. У `ADX` после `add` доступны `adx.pdi` и `adx.mdi`.
+
+## Все классы
+
+`MA?` = необязательный класс скользящей для сглаживания: `TA.SMA`, `TA.EMA`, `TA.WMA`, `TA.RMA`, `TA.WSMA` (передается класс, не экземпляр). Линтер сверяет число аргументов конструктора с этой таблицей: warn `code-ta-arity-mismatch`.
+
+| Класс | Конструктор | add принимает | Возвращает |
+|---|---|---|---|
+| `SMA`, `WMA`, `WSMA`, `SMA15` | `(interval)` | число | number или null |
+| `EMA`, `RMA`, `DEMA` | `(interval)` | число | number, прогрев по `isStable` |
+| `MOM`, `ROC` | `(interval)` | число | number или null |
+| `RSI` | `(interval, MA?)` | число | number или null |
+| `CG` | `(interval, signalInterval)` | число | number или null |
+| `StochasticRSI` | `(interval, MA?, { k, d }?)` | число | number или null |
+| `MACD` | `(fastMA, slowMA, signalMA)`, экземпляры EMA или DEMA | число | объект или null |
+| `DMA` | `(short, long, MA?)` | число | объект или null |
+| `BollingerBands` | `(interval, deviationMultiplier?)` | число | объект или null |
+| `BollingerBandsWidth` | `(bollingerBands)`, экземпляр | число | number или null |
+| `LinearRegression`, `Period`, `IQR`, `MAD` | `(interval)` | число | объект (LinearRegression, Period) или number, или null |
+| `ATR`, `ADX`, `DX` | `(interval, MA?)`, без MA сглаживание WSMA (метод Уайлдера, как в TradingView) | свеча | number или null |
+| `CCI`, `REI`, `WilliamsR` | `(interval)` | свеча | number или null |
+| `StochasticOscillator` | `(n, m, p)`: n период %K, m сглаживание %K (`stochK` уже сглаженный), p период %D | свеча | объект или null |
+| `AccelerationBands` | `(interval, width, MA?)` | свеча | объект или null |
+| `AO` | `(shortInterval, longInterval, MA?)` | свеча (high, low) | number или null |
+| `AC` | `(shortAO, longAO, signalInterval)` | свеча (high, low) | number или null |
+| `PSAR` | `({ accelerationStep, accelerationMax })` | свеча (high, low) | number или null |
+| `ZigZag` | `({ deviation })` | свеча (high, low) | number или null |
+| `OBV` | `(interval)` | свеча с open и volume | number или null |
+| `VWAP` | `()` | свеча с volume | number или null |
+| `TR` | `()` | свеча | number с первой свечи |
+| `TDS` | `()` | число (close) | number или null |
+
+`TR` и `TDS` в карте линтера нет: сигнатуру смотри в типах библиотеки, линтер арность у них не проверяет.
+
+Утилиты по массиву чисел (функции, не классы, `new` не нужен): `TA.getAverage`, `TA.getStandardDeviation`, `TA.getMedian`, `TA.getMaximum`, `TA.getMinimum`, `TA.getQuartile(values, 0.25 | 0.5 | 0.75)`, `TA.getStreaks`, `TA.getGrid`.
+
+## Чего в библиотеке нет
+
+SuperTrend, Ichimoku, Keltner, Pivot Points, Heikin Ashi, свечные паттерны, фракталы, дивергенции. Пиши формулу руками, честно и с прогревом: пока данных меньше периода, точку не добавляй. Собирай из готовых блоков: SuperTrend и Keltner из `ATR` плюс `EMA`, Donchian из `Period` (`highest` и `lowest`), Heikin Ashi из open/high/low/close предыдущего бара. Не выдавай самодельную формулу за библиотечный класс: `TA.SuperTrend` не существует и уронит smoke-тест.
+
+Примеры: https://binoview.io/docs/scripts/examples/rsi.md, https://binoview.io/docs/scripts/examples/macd.md, https://binoview.io/docs/scripts/examples/bollinger.md, https://binoview.io/docs/scripts/examples/sma-cross.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/markers.md -->
+
+# Сигналы и экспирация
+
+> Источник правды: app/composables/useChartScripts.js (processMarkers, confirmBarClose), app/utils/tw-scripts/cooldown.js, app/stores/tw/signalBus.js, app/composables/useAutoTrade.js (effectiveExpiration, scriptOverlapCap, tryOpen), app/utils/tw-scripts/runtime.js (createSeriesMarkers), node_modules/lightweight-charts/dist/typings.d.ts (SeriesMarker). Версия рантайма: 14.
+
+Как скрипт сообщает платформе о сигнале buy или sell: формат маркера, что читает рантайм, дедуп, звук, автоторговля и адаптивная экспирация.
+
+## Формат маркера
+
+```javascript
+{
+  name: "buy",                 // "buy" | "sell": читает рантайм
+  time: c.time,                // время свечи в секундах: читает рантайм
+  price: c.low,                // цена сигнала: читает рантайм и LWC
+  position: "belowBar",        // дальше только отрисовка LWC
+  shape: "arrowUp",
+  color: params.buyColor,
+  text: "BUY"
+}
+```
+
+Рантайм читает только `name`, `time`, `price` и необязательный `expiration`. Остальные поля уходят в lightweight-charts:
+
+- `position`: `belowBar`, `aboveBar`, `inBar`, `atPriceTop`, `atPriceBottom`, `atPriceMiddle` (для `atPrice*` поле `price` обязательно);
+- `shape`: `arrowUp`, `arrowDown`, `circle`, `square`;
+- `color`: строка цвета; `text`: подпись; `size`: множитель размера, по умолчанию 1; `id`: строка.
+
+Поля `silent` нет: маркер без `name` buy или sell рисуется и сигналом не считается.
+
+## Два действия в update
+
+Рантайм маркеры не рисует. Скрипт делает две вещи:
+
+```javascript
+const markersApi = createSeriesMarkers(candleSeries, []);   // в init
+// в update:
+markersApi.setMarkers(markers);   // стрелки на графике
+return markers;                   // сигналы рантайму: звук, вкладка, бот
+```
+
+Считай маркеры по всем свечам и отдавай весь массив каждый вызов (как у серий: https://binoview.io/docs/scripts/series.md). Индикатор без сигналов возвращает `[]`.
+
+Проверка кода ловит на живых свечах стрелки без `name` из `update` (`live-markers-no-name`) и buy или sell только в `setMarkers` без возврата (`live-markers-not-returned`): стрелки есть, звука и сделок нет. Список: https://binoview.io/docs/scripts/lint.md.
+
+## Когда срабатывает сигнал
+
+- Сигналом считается маркер с `name` buy или sell, у которого `time` равен времени последней свечи массива (формирующийся бар). Маркеры на прошлых барах только рисуются.
+- Дедуп: один сигнал на бар на скрипт, пару и таймфрейм. Повторные прогоны, вернувшийся маркер и смена раскладки сигнал не повторяют.
+- Эффекты: звук, подсветка вкладки на 30 секунд, автоторговля (по `scriptKey`, с любого графика).
+- Звук глушится при включенном глушении на низкой выплате, если выплата пары ниже порога.
+- Тихие прогоны (после парковки графика, форс на закрытии бара) сигналов не дают.
+- Режим бота «следующая свеча»: на закрытии бара платформа заново зовет `update` на закрытой свече и ищет маркер с ее `time`. Считай сигналы по закрытым данным, а не по случайному тику.
+
+Пример: https://binoview.io/docs/scripts/examples/sma-cross.md.
+
+## Пауза между сигналами
+
+Условие входа держится несколько баров подряд, и скрипт ставит стрелку на каждом. Вместо своего счетчика баров объяви паузу:
+
+```javascript
+export const meta = {
+  cooldown: (p) => p.cooldownBars,   // или число: cooldown: 2
+  defaultParams: { cooldownBars: 2 },
+  paramMeta: { cooldownBars: { label: "Пауза, баров", type: "number", min: 0, max: 50 } }
+};
+```
+
+- N баров без сигналов после прошедшего: сигнал на баре j проходит, если j минус индекс предыдущего прошедшего больше N. При `cooldown: 2` бары 10 и 12 дают один сигнал, 10 и 13 оба.
+- По индексам `candles`, не по часам. Обе стороны в одной очереди: sell через бар после buy не пройдет.
+- Маркеры buy и sell в паузе убираются и из `setMarkers`, и из возврата `update` (якоря общие на вызов): стрелка в паузе не рисуется, не звучит, боту не уходит. Проверка кода считает сигналы после паузы.
+- Прошедший сигнал остается якорем, пока его свеча в истории, даже если скрипт его перерисовал: после сигнала N баров тишины гарантированы.
+- Маркеры без `name` и с `time` вне свечей не трогаются; два сигнала на одном баре остаются, хост берет первый.
+- Главный сценарий: пауза на время сделки. Свой cooldown в замыкании убери (code-init-mutable-state).
+
+## Сигнал по закрытой свече
+
+Формирующаяся свеча меняется до закрытия, и сигнал по ней может исчезнуть. Чтобы считать по закрытым данным, условие бери с `candles[candles.length - 2]`, а маркер ставь с `time` последней свечи; в режиме бота «Следующая свеча» это лишнее, он сам подтверждает на закрытии, вместе выйдет двойная задержка. Маркер с `time` предпоследней или цикл до `candles.length - 1` без отдельной обработки последней свечи сигнала не дадут никогда: на истории стрелки есть, на живой нет, бот молчит. Проверка кода: `live-signals-only-closed`.
+
+## Адаптивная экспирация
+
+По умолчанию время сделки задает трейдер в окне бота. Скрипт может задавать его сам, тогда:
+
+```javascript
+export const meta = { name: "...", adaptiveExpiration: true, /* ... */ };
+// в маркере:
+{ name: "buy", time: c.time, price: c.low, expiration: 60 }
+{ name: "sell", time: c.time, price: c.high, expiration: [60, 120, 180] }
+```
+
+Правила (движок useAutoTrade):
+
+- `meta.adaptiveExpiration: true` включает в окне бота источник «Из скрипта»; без него `expiration` бот не читает.
+- Значения в секундах. Число или массив `[вход, догон1, догон2, ...]`. Длина массива минус один = число догонов (перекрытий на той же паре), которое разрешает скрипт; число или массив из одного элемента = догонов нет, бот не перекрывается даже с тумблером.
+- Лестница работает только с «Перекрывать на той же паре»; шаг k берет элемент `k`, «Макс. перекрытий» режет число догонов только вниз.
+- Кламп 5..14400 секунд, затем лимиты экспирации пары: вне лимитов сигнал пропускается, счетчик «Пропущено».
+- В режиме «Из скрипта» сигнал без `expiration` (нечисло, ноль, отрицательное) пропускается, запасного значения нет.
+- В режиме «следующая свеча» берется `expiration` маркера, подтвержденного на закрытии.
+- Скрипт не знает исход сделки и глубину серии: считай экспирацию по рынку (ATR, таймфрейм), не «по номеру минуса».
+- Без явной просьбы трейдера поле `expiration` и флаг `adaptiveExpiration` не добавляй.
+
+Пример: https://binoview.io/docs/scripts/examples/adaptive-bot.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/hud.md -->
+
+# HUD-карточка
+
+> Источник правды: app/utils/tw-scripts/hud.js, app/utils/tw-scripts/runtime.js, shared/scriptMetaValidator.js. Версия рантайма: 14.
+
+DOM-карточка в углу графика: статистика, состояние бота, тревоги. Скрипт декларирует ее через `export const hud`, обновляет из `update` вызовом `ctx.hud.set(state)`.
+
+## HUD или примитив
+
+| Задача | Инструмент |
+|---|---|
+| Числа, статусы, тревога в углу графика | HUD |
+| Кнопки «пауза», «сброс» | HUD, см. hud-buttons |
+| Заливка между линиями, зоны, фигуры на свечах | Pane Primitive, см. primitives |
+| Горизонтальный уровень | `series.createPriceLine`, см. series |
+
+## Контракт
+
+```javascript
+export const hud = {
+  anchor: "TR",          // "TR" | "TL" | "BR" | "BL", регистр не важен, невалидный = "TR"
+  offset: { top: 12, right: 12, bottom: 12, left: 12 }, // px, дефолт 12 на каждую сторону
+  fontPx: 12,            // базовый font-size карточки
+  visible: true,         // дефолт видимости
+  pointerEvents: "none", // только "auto" включает клики, любое другое значение = "none"
+  css: `...`,            // строка или функция (p, env) => string
+  defaultParams: {},     // свои параметры карточки, необязательно
+  paramMeta: {},
+  render: (s, html, env) => html`...` // обязателен
+};
+```
+
+Обязателен только `render`: не функция, ошибка `hud-render-not-function`, HUD не монтируется. Невалидное значение любого другого поля дает warn (`hud-anchor-invalid`, `hud-offset-not-object`, `hud-css-invalid` и т.п.), рантайм берет дефолт.
+
+Рантайм монтирует host над графиком в закрытом shadow root, ставит `:host { all: initial }` и `.hud-root { font: <fontPx>px system-ui }`, добавляет твой css, при удалении скрипта снимает узел сам. `destroy` не пиши.
+
+## Обновление из update
+
+```javascript
+update(candles) {
+  // расчет
+  ctx.hud.set({ wr, wins, losses, alert: wr < params.alertWr });
+  return [];
+}
+```
+
+`ctx.hud.set(state)`:
+- зовет `render(state, html, env)`, санитайзит результат, пишет в `innerHTML`;
+- одинаковый HTML подряд не перерисовывает;
+- `null`, `undefined`, пустая строка из render: обновление пропущено, прошлый контент остается;
+- ошибка в render или css глотается с `console.warn`: скрипт живет, карточка молча не обновляется;
+- на скрытом (запаркованном) графике вызов игнорируется, после показа рантайм перепрогонит `update`. Всегда передавай полный state, не дельту.
+
+Без `export const hud` и при `_hudVisible: false` `ctx.hud.set/on/off` это пустые заглушки, проверки не нужны.
+
+## render(state, html, env)
+
+- `state`: ровно то, что передали в `set`. `params`/`p` внутри render нет (линтер: warn `code-p-in-render`). Нужен параметр в шаблоне: положи его в state.
+- `html`: tagged template. Все `${...}` эскейпятся; вложенный `html\`...\`` и массивы фрагментов вставляются как есть; `null`, `undefined`, `false` дают пустую строку, число `0` выводится как `0`.
+- `env`: `{ isDark }`, plain-объект, снят в момент монтажа.
+- Возврат: результат `html\`...\``, строка (тоже санитайзится) или `null` (пропуск).
+- Чистая функция: без побочных эффектов и без `ctx.hud.on` внутри (линтер: error `code-hud-on-in-render`).
+
+Санитайзер вырезает `<script>`, `<iframe>`, `<object>`, `<embed>`, атрибуты `on*=`, `javascript:`/`data:` в URL и все form-элементы (`form`, `input`, `select`, `textarea`, `label`, `progress`, `meter` и прочие). Из интерактива разрешен только `<button>`. Прогресс-бар: `div` с шириной в CSS, не `<progress>`.
+
+## Параметры карточки
+
+Системные `_hud*` рантайм инжектит в `paramMeta` сам, когда есть `export const hud`. Юзер крутит их в настройках скрипта, в коде их не объявляй (линтер: warn `code-hud-prefix-in-meta`).
+
+| Ключ | Тип | Дефолт | Лимиты |
+|---|---|---|---|
+| `_hudVisible` | boolean | `hud.visible`, иначе true | |
+| `_hudAnchor` | select | `hud.anchor`, иначе "TR" | TR, TL, BR, BL |
+| `_hudTop`, `_hudRight`, `_hudBottom`, `_hudLeft` | number | `hud.offset.*`, иначе 12 | 0..4000 |
+| `_hudFontPx` | number | `hud.fontPx`, иначе 12 | 8..24 |
+
+Поле-функция (`anchor: () => "BL"`, `offset: (p) => ({ ... })`, `fontPx`, `visible`) значит «автор управляет сам»: соответствующий `_hud*` не инжектится, а для anchor и offset еще отключается перетаскивание карточки замочком. Функция получает `(params, env)`.
+
+Свои параметры карточки (пороги тревог, цвет фона) объявляй в `hud.defaultParams` и `hud.paramMeta`, формат тот же, что у `meta` (см. params). Они попадают в общий `ctx.params` без префикса. Префикс `_hud` в своих ключах зарезервирован: такие ключи отбрасываются с warn `hud-paramMeta-reserved-prefix`. Дубль ключа в `meta.paramMeta` и `hud.paramMeta`: выигрывает `meta`, так не делай.
+
+Изменение любого параметра в настройках (кроме позиционных `_hud*`) пересоздает инстанс скрипта, HUD монтируется заново. Перетаскивание и позиционные поля применяются к живой карточке без пересоздания.
+
+## Темы и размеры
+
+`css` как функция `(p, env)`: `p` это полный params (включая `_hud*` и свои параметры карточки), `env.isDark` тема. Честная оговорка: `env` снимается один раз при монтаже и не реактивен. Смена темы сайта не пересоздает инстансы и не перерисовывает карточку, новая палитра применится после пересоздания. Ветка по `env.isDark` все равно нужна.
+
+Размеры пиши в `em`. Базовый `font-size` рантайм ставит из `_hudFontPx`, все `em` масштабируются вместе с ним; `padding: 8px` и `min-width: 160px` застывают, при мелком шрифте карточка остается огромной. `font-size` корня не переопределяй.
+
+Углы: TL занят панелью выбора пары и таймфрейма, BR переключателем пар, в BL временно появляется бейдж сигнала. Безопасный дефолт: TR.
+
+## Типичные ошибки
+
+- Ключи в `set` и в `render` расходятся: `undefined` рендерится пустой строкой, ошибки нет, просто пустое место.
+- `p.period` внутри render: ReferenceError глотается, карточка молча пустая. Только `state`.
+- `ctx.hud.on` в render или update: ошибка линтера либо потолок 64 подписок. Только в init.
+
+Smoke-тест перед сохранением зовет render с последним state и `env = { isDark: false }`, только если в update был `set`. `css(p, env)` и реальный DOM не проверяются: ошибки css всплывут на графике как `console.warn`.
+
+Примеры: https://binoview.io/docs/scripts/examples/rsi-hud.md (свои параметры, две темы), https://binoview.io/docs/scripts/examples/hud-buttons.md. Кнопки: https://binoview.io/docs/scripts/hud-buttons.md. Несколько карточек у одного скрипта: https://binoview.io/docs/scripts/hud-cards.md. Линтер: https://binoview.io/docs/scripts/lint.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/hud-buttons.md -->
+
+# Кнопки в HUD
+
+> Источник правды: app/utils/tw-scripts/hud.js, app/utils/tw-scripts/runtime.js, shared/scriptCodeLinter.js. Версия рантайма: 14.
+
+Кнопки внутри HUD-карточки и подписка на клики через `ctx.hud.on`. Для ручных действий без пересоздания инстанса: пауза бота, сброс счетчика, переключение режима.
+
+## Зачем
+
+Правка параметра в настройках пересоздает инстанс скрипта и обнуляет накопленное состояние (счетчики, базовую точку статистики). Клик по кнопке в HUD меняет состояние в замыкании `init` мгновенно, инстанс живет дальше. Это единственный интерактив в скрипте: `onclick=""` и любые `on*` атрибуты санитайзер вырезает.
+
+## Минимальный паттерн
+
+```javascript
+export const hud = {
+  pointerEvents: "auto",   // обязательно, иначе клик проваливается на график
+  css: `
+    .card { pointer-events: none; padding: 0.6em 0.9em; }
+    .card .controls { pointer-events: auto; display: flex; gap: 0.5em; }
+    button[data-action] { cursor: pointer; font: inherit; }
+  `,
+  render: (s, html) => html`
+    <div class="card">
+      <div>${s.paused ? "Пауза" : "Активен"}: ${s.ups} из ${s.total}</div>
+      <div class="controls">
+        <button data-action="reset">Сброс</button>
+        <button data-action="pause">${s.paused ? "Продолжить" : "Пауза"}</button>
+      </div>
+    </div>
+  `
+};
+
+export function init(ctx) {
+  let baselineTime = 0;   // меняют только обработчики
+  let paused = false;
+  ctx.hud.on("click", '[data-action="reset"]', () => { baselineTime = ctx.time.now(); });
+  ctx.hud.on("click", '[data-action="pause"]', () => { paused = !paused; });
+  return {
+    update(candles) {
+      const slice = candles.filter((c) => c.time >= baselineTime);
+      const ups = slice.filter((c) => c.close > c.open).length;
+      ctx.hud.set({ paused, ups, total: slice.length });
+      return [];
+    }
+  };
+}
+```
+
+Полный пример: https://binoview.io/docs/scripts/examples/hud-buttons.md.
+
+## Контракт ctx.hud.on(event, selector, handler)
+
+| Аргумент | Допустимо |
+|---|---|
+| `event` | только `"click"` |
+| `selector` | `[data-action="имя"]` или `[data-action]`; имя по `^[A-Za-z][A-Za-z0-9_-]{0,31}$`, кавычки необязательны |
+| `handler` | функция `(event) => void`, получает нативный MouseEvent |
+
+Любое нарушение: `console.warn`, подписка не регистрируется, исключения нет. Ошибка внутри handler тоже глотается с warn.
+
+Механика: один делегированный listener на shadow root. Он переживает перерисовки `ctx.hud.set`, поэтому новый `<button data-action="reset">` после перерисовки автоматически под подпиской. Совпадение ищется по пути от target вверх до host: `data-action` можно вешать на кнопку с вложенной иконкой.
+
+`ctx.hud.off(selector)` снимает подписки с точно таким же селектором (строковое сравнение), `ctx.hud.off()` снимает все. Обычно не нужно: при удалении скрипта рантайм снимает подписки и listener сам.
+
+Без `export const hud` и при `_hudVisible: false` `on`/`off` это пустые заглушки, вызывай без проверок.
+
+## Регистрация только в init
+
+`on` вызывай в теле `init`, один раз на кнопку. В `render` это ошибка линтера `code-hud-on-in-render` (render зовется на каждом `set`). В `update` по смыслу то же: подписки копятся, после 64-й `on` игнорирует вызовы с warn.
+
+## pointerEvents: "auto"
+
+По умолчанию host карточки `pointer-events: none`, чтобы зум и панорамирование графика работали сквозь HUD. Для кнопок объяви `pointerEvents: "auto"` (линтер: warn `code-hud-on-no-pointer-events`, если есть `on`, а поля нет). Любое значение кроме `"auto"` трактуется как `"none"`.
+
+Паттерн «host прозрачен, кнопки кликабельны»: `pointerEvents: "auto"` в декларации плюс в css `.card { pointer-events: none }` и `.controls { pointer-events: auto }`. Мимо кнопок мышь снова проваливается на график, кнопки ловят клик. В режиме перемещения карточки (открыт замочек) клики по кнопкам глушатся, жест принадлежит перетаскиванию.
+
+## Где живет состояние
+
+В замыкании `init`: `let paused = false`. Меняют его только обработчики, `update` его читает и кладет в `ctx.hud.set`. Мутация closure-переменной прямо из `update` ловится линтером `code-init-mutable-state` (правило против накопления состояния между вызовами update), из обработчика мутация легальна.
+
+Время клика бери по часам брокера, `ctx.time.now()` (unix-секунды), тогда оно сравнимо с `candle.time`; `Date.now()` это часы устройства, линтер code-device-clock.
+
+Пауза сигналов: на паузе рисуй стрелки как обычно, но из `update` возвращай `[]`. После снятия паузы сигнал на текущем баре засчитается, если раньше на этом баре не отдавался (дедуп один сигнал на бар).
+
+## Ограничения v1
+
+- Только событие `click`, только `<button>`. Все form-элементы (`input`, `select`, `textarea`, `label`, `progress`, `meter` и прочие) санитайзер вырезает целиком; атрибуты `formaction`, `formmethod`, `formenctype`, `formtarget`, `formnovalidate` у кнопки удаляются.
+- Throttle 100 мс на пару (event, selector): повторный клик в пределах 100 мс игнорируется. Не настраивается.
+- Лимит 64 подписки на карточку.
+- Состояние локальное: живет в инстансе на одном графике, не попадает в настройки скрипта, не переживает перезагрузку страницы и пересоздание инстанса (правка параметров). Постоянный выбор юзера только через `paramMeta`.
+- Перерисовка в `set` пересоздает DOM кнопок: фокус с кнопки слетает при каждом реальном изменении HTML.
+- Smoke-тест перед сохранением клики не имитирует: `on`/`off` там заглушки. Логику обработчиков проверяй на графике.
+
+См. также: https://binoview.io/docs/scripts/hud.md, https://binoview.io/docs/scripts/lint.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/hud-cards.md -->
+
+# Несколько HUD-карточек
+
+> Источник правды: app/utils/tw-scripts/hud.js, app/utils/tw-scripts/runtime.js, shared/scriptMetaValidator.js. Версия рантайма: 14.
+
+Одному скрипту можно объявить до четырех карточек: статистика, тревога, кнопки, каждая своей карточкой. У каждой карточки свой угол, css, размер шрифта, свои параметры и свой замочек для перетаскивания. Одиночная карточка описана в hud.md, здесь только отличия.
+
+## Контракт
+
+```javascript
+export const hud = {
+  stats: {                 // ключ карточки: латиница, цифры, _, с буквы
+    label: "Статистика",   // подпись группы в настройках, без него ключ
+    anchor: "TR",
+    offset: { top: 76, right: 12 }, // под первой карточкой
+    css: `...`,
+    render: (s, html) => html`...`
+  },
+  rsi: {
+    label: "RSI",
+    anchor: "TR",
+    pointerEvents: "auto", // только у карточки с кнопками
+    defaultParams: { overbought: 70 },
+    paramMeta: { overbought: { label: "Перекупленность", type: "number" } },
+    render: (s, html) => html`...`
+  }
+};
+```
+
+Признак нескольких карточек: в `hud` нет ни одного поля одиночной карточки (`render`, `anchor`, `offset`, `css`, `fontPx`, `visible`, `pointerEvents`, `defaultParams`, `paramMeta`), а каждое поле это объект с `render`. Поля карточки те же, что у одиночной, с той же семантикой: функции `(params, env)`, размеры в `em`, темы через `env.isDark`. `render` обязателен в каждой карточке. Ключ карточки не может совпадать с полем одиночной карточки (`visible`, `css` и остальные из списка выше). Потолок 4 карточки, больше это уже панель.
+
+## Обновление
+
+`ctx.hud.set({ stats: {...}, rsi: {...} })`: ключи это имена карточек, значение это state для `render` этой карточки. Карточка, которой нет в объекте, не перерисовывается: `set` можно звать по частям, из `init` и из `update`. Неизвестное имя или не объект вместо `{ card: state }` на графике игнорируется с одним `console.warn`, а проверка кода считает это ошибкой той фазы, где вызван `set`. Как и у одиночной карточки, передавай полный state карточки, не дельту.
+
+`ctx.hud.on("click", '[data-action="reset"]', handler)` слушает все карточки: один `data-action` в двух карточках вызовет один обработчик. `pointerEvents: "auto"` ставь только карточке с кнопками, остальные остаются прозрачными для кликов. Регистрация по-прежнему в `init`, не в `render`.
+
+## Параметры и позиция
+
+Системные ключи каждой карточки: `_hud.<card>.visible`, `_hud.<card>.anchor`, `_hud.<card>.top`, `_hud.<card>.right`, `_hud.<card>.bottom`, `_hud.<card>.left`, `_hud.<card>.fontPx`. Дефолты и лимиты те же, что у `_hud*` одиночной карточки, рантайм добавляет их сам, в коде их не объявляй. В настройках скрипта раздел HUD делится на группы по `label`, в каждой: показывать, позиция, четыре отступа, размер шрифта, потом свои параметры карточки.
+
+Свои параметры карточек попадают в общий `ctx.params` без префикса, поэтому одно имя в двух карточках это ошибка `hud-card-param-duplicate`. В `css(p, env)` карточки `p` это общий params, включая `_hud.<card>.*` всех карточек.
+
+Перетаскивание замочком и поля позиции применяются к своей карточке без пересоздания инстанса, позиция общая для всех графиков со скриптом. Видимость, шрифт и свои параметры пересоздают инстанс, как любой параметр.
+
+## Углы
+
+Свободен только правый верхний угол: слева сверху панель выбора пары и таймфрейма, справа снизу переключатель пар, слева снизу появляется бейдж сигнала. Карточки ставь в TR друг под другом со сдвигом `offset.top` (пример: вторая с `top: 76` под карточкой в 12px). Карточки без `offset` встают одна на другую: проверка даст warn `hud-cards-same-corner`, когда совпадают угол и отступы по его двум сторонам (у TR это `top` и `right`). Автораскладки нет, карточки сами не двигаются; трейдер может растащить их замочком.
+
+## Ошибки проверки
+
+- `hud-too-many-cards` error: больше четырех карточек, HUD не монтируется вовсе.
+- `hud-card-key-invalid` error: ключ не идентификатор (кириллица, пробел, дефис), карточка не монтируется. Имя для людей в `label`.
+- `hud-card-not-object` error, `hud-card-render-not-function` error: значение не объект (карточка не монтируется) или без `render`.
+- `hud-card-label-invalid` warn: `label` не строка.
+- `hud-card-param-duplicate` error: свой параметр с одним именем в двух карточках.
+- `hud-cards-same-corner` warn: две карточки в одном углу с теми же отступами.
+- `hud-mixed-declaration` warn: рядом с полями одиночной карточки лежит объект с `render`, он игнорируется.
+
+Остальные коды те же, что у одиночной карточки, с именем карточки в тексте. Smoke-тест зовет `render` каждой карточки с ее последним state, имя карточки в тексте ошибки фазы «Рендер HUD»; карточка без `set` пропускается. Линтер проверяет каждый `render` (`code-p-in-render`, `code-hud-on-in-render`); `code-hud-on-no-pointer-events` молчит, если `pointerEvents: "auto"` есть хоть у одной карточки.
+
+## Старые скрипты
+
+Одиночная карточка не меняется: ключи `_hudAnchor`, `_hudTop` и остальные, пресеты и сохраненные позиции остаются. Объект `hud` с `render` всегда одиночная карточка, даже если рядом есть объект с `render` (warn `hud-mixed-declaration`).
+
+Пример: https://binoview.io/docs/scripts/examples/hud-cards.md. Одиночная карточка: https://binoview.io/docs/scripts/hud.md. Кнопки: https://binoview.io/docs/scripts/hud-buttons.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/series.md -->
+
+# Серии и уровни
+
+> Источник правды: app/utils/tw-scripts/runtime.js (initCompiledScript: trackedAddSeries, _trackCreatedSeries, _guardedApplyOptions, _autoCleanup), app/composables/useChartScripts.js (quietRepaint), node_modules/lightweight-charts/dist/typings.d.ts (LineStyleOptions, HistogramStyleOptions, SeriesOptionsCommon, PriceLineOptions, ISeriesApi). Версия рантайма: 14.
+
+Как скрипт рисует линии и гистограммы, зачем всегда полный `setData`, когда уместен `series.update`, как ставить горизонтальные уровни и фиксировать шкалу.
+
+## addSeries
+
+```javascript
+const { addSeries, LineSeries, HistogramSeries, paneIndex, params } = ctx;
+const line = addSeries(LineSeries, { color: params.color, lineWidth: 2 }, paneIndex);
+```
+
+- Сигнатура `addSeries(Type, options, paneIndex)`. Типы берутся из `ctx`: только `LineSeries` и `HistogramSeries`, импорта нет.
+- При `pane: "separate"` третий аргумент `ctx.paneIndex` обязателен, иначе линия ляжет на свечи (warn `code-addSeries-no-paneIndex`). При `pane: "main"` его не передавай. Подробнее: https://binoview.io/docs/scripts/pane.md.
+- `chart.addSeries(...)` и `pane.addSeries(...)` тоже отслеживаются, но `ctx.addSeries` короче.
+- Точка данных: `{ time, value }`, время в секундах как у свечей, массив по возрастанию времени без дублей. У гистограммы точка может нести свой `color`. Разрыв линии (SuperTrend, PSAR): точка без value `{ time }`, линия там не рисуется.
+
+## Ключевые опции
+
+| Опция | Значения | Заметка |
+|---|---|---|
+| `color` | строка | цвет линии или столбцов |
+| `lineWidth` | `1`, `2`, `3`, `4` | по умолчанию 3, не пиши 5 |
+| `lineStyle` | `0` сплошная, `1` точки, `2` пунктир, `3` крупный пунктир, `4` редкие точки | |
+| `priceLineVisible` | boolean | линия последнего значения, обычно `false` |
+| `lastValueVisible` | boolean | ярлык последнего значения на шкале, обычно `false` |
+| `crosshairMarkerVisible` | boolean | точка под курсором |
+| `title` | строка | подпись у ярлыка |
+| `visible` | boolean | скрыть серию вместе с ее уровнями |
+| `base` | число | только гистограмма: уровень, от которого растут столбцы (обычно `0`) |
+| `priceFormat` | `{ type: "price", precision, minMove }` | см. ниже |
+| `priceScaleId` | строка | см. ниже |
+
+`priceFormat`: по умолчанию 2 знака после запятой. Для осцилляторов на форексе значения вроде 0.00012 округлятся в 0.00, поэтому у MACD и похожих ставь `{ type: "price", precision: 5, minMove: 0.00001 }`. Есть еще `type: "percent"` и `"volume"`.
+
+`priceScaleId`: по умолчанию серия делит правую шкалу панели. Любая другая строка (`"osc"`) дает серии свою невидимую шкалу поверх панели, свечная шкала при этом не искажается; отступы задаются через `series.priceScale().applyOptions({ scaleMargins: { top: 0.7, bottom: 0 } })`.
+
+Опции меняются на лету: `series.applyOptions({ color: "#fff" })`.
+
+## Полный setData: контракт
+
+`update(candles)` получает весь массив свечей на каждый вызов. Считай индикатор целиком и отдавай `series.setData(полныйМассив)`, для маркеров `setMarkers(полныйМассив)`. Причина не только в простоте: на запаркованном (невидимом) графике рантайм глотает `setData`, `setMarkers` и `hud.set`, а при показе перепрогоняет `update` и рассчитывает, что он восстановит всю картинку. Тот же путь при смене пары и таймфрейма. Пустой массив свечей: очисти серии `setData([])` и верни `[]`.
+
+## series.update(point)
+
+`series.update({ time, value })` добавляет точку или заменяет последнюю, если время совпало; время новой точки не может быть меньше последней. Парковкой не гейтится: инкрементальный скрипт (один `setData`, потом `update` на бар) дыры после показа не получит. Уместен, когда полный пересчет заведомо дорог и скрипт хранит свое состояние осознанно; по умолчанию держись полного `setData`, он проще и всегда согласован.
+
+## Горизонтальный уровень
+
+Уровень это `createPriceLine` у серии, а не Pane Primitive и не отдельная серия:
+
+```javascript
+const line = candleSeries.createPriceLine({
+  price: 0, color: params.color, lineWidth: 1, lineStyle: 2,
+  axisLabelVisible: true, title: "Open"
+});
+// в update:
+line.applyOptions({ price: first.open });
+// убрать:
+candleSeries.removePriceLine(line);
+```
+
+Опции: `price` (обязателен), `color`, `lineWidth`, `lineStyle`, `lineVisible`, `axisLabelVisible`, `title`, `axisLabelColor`, `axisLabelTextColor`, `id`. Создавай в `init`, в `update` только двигай через `applyOptions`. Уровень можно вешать и на свои серии: например, линии 30 и 70 на серии RSI в отдельной панели; smoke-тест это поддерживает. Пример: https://binoview.io/docs/scripts/examples/price-line.md.
+
+## Автоочистка
+
+При снятии скрипта рантайм в обратном порядке удаляет все, что создано через ctx: серии (`removeSeries`), маркеры (`setMarkers([])`), примитивы, панели, HUD, свои трансформы автомасштаба. `destroy()` не пиши (warn `code-destroy-in-init-return`). Уровни `createPriceLine` на любой серии, включая `candleSeries`, тоже отслеживаются и снимаются при удалении скрипта.
+
+## Фиксированная шкала осциллятора
+
+Чтобы RSI или Stochastic не «дышали» и держали 0..100:
+
+```javascript
+line.applyOptions({
+  autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } })
+});
+```
+
+Провайдер получает `original` (функцию с базовым диапазоном) и может вернуть его измененным. Рантайм кладет провайдер в цепочку трансформов серии: несколько скриптов на одной серии друг друга не затирают, повторный `applyOptions` заменяет свой трансформ на месте (безопасно звать и в `update`), при снятии скрипта трансформ убирается. Для отдельной панели без фикса хватает `series.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0.1, bottom: 0.1 } })`, как в https://binoview.io/docs/scripts/examples/macd.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/primitives.md -->
+
+# Pane Primitives
+
+> Источник правды: app/utils/tw-scripts/runtime.js, app/utils/tw-scripts/primitiveMemo.js, app/utils/tw-scripts/smokeTest.js, node_modules/lightweight-charts typings.d.ts. Версия рантайма: 14.
+
+Своя графика на canvas через ISeriesPrimitive / IPanePrimitive из lightweight-charts: заливки между линиями, зоны, фигуры на свечах. Все, что серии и маркеры нарисовать не могут.
+
+## Когда нужен примитив
+
+| Задача | Инструмент |
+|---|---|
+| Линия, гистограмма | `addSeries(LineSeries / HistogramSeries)`, см. series |
+| Горизонтальный уровень (порог 70, нулевая линия) | `series.createPriceLine`, не примитив, см. series |
+| Стрелка или кружок у свечи | маркеры, см. markers |
+| Карточка с текстом в углу | HUD, см. hud |
+| Заливка между двумя линиями, зона по времени и цене, подсветка баров, градиент, фигура | примитив |
+
+Примитив это три класса и ручной пересчет координат. Не бери его для того, что делается одной серией или уровнем.
+
+## Три класса
+
+```javascript
+class FillPrimitive {                        // ISeriesPrimitive
+  constructor() { this._view = new FillView(); }
+  attached(p) { this._view.attached(p); }    // p = { chart, series, requestUpdate }
+  detached() { this._view.detached(); }
+  paneViews() { return [this._view]; }
+  updateAllViews() { this._view.update(); }
+  setData(data) { this._view.setData(data); } // свой метод, зовется из update скрипта
+}
+
+class FillView {                             // IPrimitivePaneView
+  attached({ chart, series, requestUpdate }) { this._chart = chart; this._series = series; this._requestUpdate = requestUpdate; }
+  detached() { this._chart = this._series = this._requestUpdate = null; }
+  setData(data) { this._data = data; this._requestUpdate?.(); }
+  update() { /* координаты, см. ниже */ }
+  renderer() { return new FillRenderer(this._renderData); }  // можно вернуть null
+  zOrder() { return "bottom"; }              // "bottom" | "normal" | "top"
+}
+
+class FillRenderer {                         // IPrimitivePaneRenderer
+  constructor(d) { this._d = d; }
+  draw(target) {
+    target.useMediaCoordinateSpace(({ context: c }) => { /* Canvas 2D по this._d */ });
+  }
+}
+```
+
+По типам все хуки примитива необязательны, но без `attached` не будет `chart`, `series`, `requestUpdate`, а без `updateAllViews` координаты не пересчитаются при скролле. Хуки `priceAxisViews`, `timeAxisViews`, `autoscaleInfo`, `hitTest` тоже проксируются, нужны редко.
+
+`draw` только внутри `target.useMediaCoordinateSpace`: координаты из `priceToCoordinate` и `timeToCoordinate` в CSS-пикселях, в bitmap-пространстве на retina они уедут.
+
+`zOrder`: `"bottom"` под свечами (заливки, зоны), `"top"` поверх (подписи), `"normal"` по умолчанию.
+
+## Координаты: только в View.update и только по своим точкам
+
+```javascript
+update() {
+  if (!this._chart || !this._series || !this._data.length) { this._renderData = null; return; }
+  const ts = this._chart.timeScale();
+  const points = [];
+  for (const item of this._data) {
+    const x = ts.timeToCoordinate(item.time);
+    const yUpper = this._series.priceToCoordinate(item.upper);
+    const yLower = this._series.priceToCoordinate(item.lower);
+    if (x === null || yUpper === null || yLower === null) continue;  // вне видимой области
+    points.push({ x, yUpper, yLower });
+  }
+  this._renderData = { points };
+}
+```
+
+- `timeScale().timeToCoordinate(time)` дает X по времени точки; `null`, если такого времени нет на шкале. `logicalToCoordinate(index)` берет индекс бара (тот же, что в `candles`) и число вернет всегда, за левым краем отрицательное.
+- `series.priceToCoordinate(price)` дает Y в шкале серии примитива; `null`, пока у серии нет данных. Цена вне видимого диапазона дает координату за холстом.
+- Точки с `null` пропускай, координаты за холстом рисуй как есть, canvas обрежет. Правый край для зон «до конца»: `scope.mediaSize.width` внутри `useMediaCoordinateSpace((scope) => ...)`.
+- Ширина бара: `Math.abs(ts.logicalToCoordinate(1) - ts.logicalToCoordinate(0))`.
+
+## Легкий паттерн против тяжелого
+
+Тяжелый паттерн из старых примеров: в `View.update` читать `series.data()`, строить `Map` время в индекс по всем свечам и гнать `priceToCoordinate` по каждой. LWC зовет `updateAllViews` у всех примитивов панели при каждом пересчете, на живой паре это каждый кадр. На стенде сетка из четырех графиков давала 16 fps.
+
+Теперь рантайм оборачивает примитив мемо-адаптером: `updateAllViews` реально вызывается только при смене видимого диапазона, трансформа ценовой шкалы, после твоего `requestUpdate` и после каждого `update` скрипта (та же сетка: 58 fps). Правило остается: в `update` считай координаты только по своим точкам (`this._data`), не читай `series.data()`, не строй `Map` по всем свечам. Данные готовь один раз в `update` скрипта и передавай через `setData`.
+
+Ограничение адаптера: он форвардит фиксированный набор хуков, снятых с объекта в момент `attach`. Методы, добавленные на примитив позже, LWC не увидит. Объявляй хуки в классе заранее.
+
+## requestUpdate после setData
+
+`attached` отдает `requestUpdate`. Сохрани его и зови после каждого изменения данных примитива (в `setData`): это и просьба графику перерисоваться, и сигнал адаптеру, что координаты устарели. Страховка: после каждого `update` скрипта рантайм сам помечает его примитивы грязными, но при изменении данных вне `update` (например, из обработчика кнопки HUD) без `requestUpdate` перерисовки не будет.
+
+## Привязка и авто-очистка
+
+```javascript
+const fill = new FillPrimitive();
+attachPrimitive(candleSeries, fill);        // из ctx
+candleSeries.attachPrimitive(fill);         // напрямую, эквивалентно
+chart.panes()[paneIndex].attachPrimitive(fill); // примитив панели: attached получает { chart, requestUpdate }, без series
+```
+
+Все три пути трекаются: серии и панели из `ctx` проксированы, при удалении скрипта рантайм сам зовет `detachPrimitive`. `destroy` не пиши. Один объект можно прикрепить к нескольким сериям, каждая привязка снимается отдельно. Серия из `addSeries` тоже подходит: тогда `priceToCoordinate` считает в ее шкале (нужно на отдельной панели индикатора).
+
+На скрытом (запаркованном) графике `updateAllViews` не вызывается, после показа пересчет догонит сам.
+
+## Что не проверяет smoke
+
+Smoke-тест перед сохранением зовет `attached` через мок (`priceToCoordinate` всегда 100, `timeToCoordinate` 100, `logicalToCoordinate(i)` = i*5, `series.data()` пустой), но не вызывает `updateAllViews`, `renderer` и `draw`. Ошибки в `update` view и в `draw` всплывут только на графике: проверяй визуально и смотри консоль.
+
+Полный пример с заливкой Bollinger: https://binoview.io/docs/scripts/examples/bollinger-fill.md. См. также https://binoview.io/docs/scripts/series.md, https://binoview.io/docs/scripts/pane.md, https://binoview.io/docs/scripts/markers.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/market.md -->
+
+# Рынок и время: ctx.market, ctx.time, ctx.fmt
+
+> Источник правды: app/utils/tw-scripts/marketTime.js (фабрики), app/composables/useChartScripts.js (входы хоста), app/utils/tw-scripts/smokeTest.js (значения в проверке). Версия рантайма: 14.
+
+Скрипт знает, на какой паре и таймфрейме он работает, какая сейчас доходность, который час у брокера и в каком поясе трейдер смотрит на шкалу графика. Раньше все это угадывали по свечам и часам устройства, теперь это поля ctx. Три объекта, заморожены: присваивание в них бросает ошибку.
+
+## ctx.market
+
+- `pair`: имя актива у брокера как в каталоге, например `"EURUSD_otc"`. Смена пары пересоздает инстанс, поэтому поле постоянное.
+- `label`: читаемое имя, `"EUR/USD OTC"`. Для подписей и HUD.
+- `otc`: `true` для OTC-активов (суффикс `_otc`). На них объем свечи синтетический, а торги идут круглосуточно.
+- `hasVolume`: `true`, если объем свечи осмыслен: у брокера он есть и пара не OTC. У BinoDex объема нет (`volume` всегда 0), на OTC он синтетический. Объемную логику (OBV, VWAP, всплески) включай только при нем.
+- `payout`: текущая доходность в процентах, число вроде `82`, или `null`, пока брокер ее не прислал. Живое значение: меняется в течение дня, копия в начале `update` допустима, копия в `init` устареет.
+- `digits`: знаков после запятой в котировке актива (5 у EUR/USD, 3 у пар с JPY, 2 у акций). Если брокер не прислал, точность, которую график применил к свечам.
+- `broker`: код брокера аккаунта в нижнем регистре, `"po"` или `"binodex"`, или `null` вне графика. Для объема бери `hasVolume`, не имя брокера.
+
+## ctx.time
+
+Все времена в unix-секундах, как `time` свечи. Аргумент `t` везде необязателен: без него берется текущий момент.
+
+- `tf`: таймфрейм графика в секундах (`60` для M1, `300` для M5, `3600` для H1).
+- `tfName`: имя таймфрейма как на графике: `"S5"`, `"M1"`, `"M15"`, `"H1"`. Для подписей в HUD.
+- `now()`: часы брокера в unix-секундах, синхронизированы по тикам котировок; до первого тика после открытия графика это еще часы устройства. Не `Date.now()` для времени сделки: часы устройства отстают или спешат.
+- `hour(t)`, `minute(t)`, `weekday(t)`: час 0..23, минута 0..59 и день недели (0 воскресенье, 6 суббота) в поясе шкалы графика, то есть так, как трейдер видит время под свечами. Для сессионных фильтров и «не торговать в пятницу вечером».
+- `offset(t)`: смещение этого пояса от UTC в секундах на момент `t` (переходы на летнее время учтены).
+- `dayStart(t)`: unix начала местных суток, в которые попадает `t`. Переходы на летнее и зимнее время учтены.
+- `barStart(t)`: unix начала бара по сетке таймфрейма, в который попадает `t`.
+- `barLeft()`: секунд до закрытия текущего бара по часам брокера (`null`, если таймфрейм неизвестен). Для входов «за N секунд до закрытия».
+
+Пояс шкалы графика это настройка терминала (по умолчанию пояс устройства при первом входе), а не пояс сервера брокера. Если условие сформулировано «по московскому времени», спроси трейдера, в каком поясе у него шкала, или считай через `offset`.
+
+## ctx.fmt
+
+- `price(value, digits?)`: строка цены со знаками актива (`market.digits`) или с заданным числом знаков от 0 до 20: `fmt.price(1.08499999)` дает `"1.08500"`. Для HUD и `text` маркера вместо `toFixed(5)`.
+- `num(value, digits = 2)`: число с фиксированными знаками, `fmt.num(61.256)` дает `"61.26"`.
+- `time(t, withSeconds = false)`: `"15:34"` или `"15:34:56"` в поясе шкалы графика. Без `t` текущее время брокера.
+
+Мусор (`NaN`, `undefined`) дает пустую строку, не бросает.
+
+## Что делать с этим в скрипте
+
+- Фильтр по сессии: `const h = time.hour(c.time); if (h < params.fromHour || h >= params.toHour) continue;` внутри цикла по свечам, чтобы старые сигналы на истории тоже подчинялись фильтру.
+- Порог доходности: `if (market.payout !== null && market.payout < params.minPayout) return [];` в начале `update` (маркеры и серии все равно перерисуй). Сравнивай с `null`: до первого тика доходности нет.
+- Объем: `if (!market.hasVolume) { ... }` для отключения объемной логики, пример https://binoview.io/docs/scripts/examples/volume-guard.md. Линтер подскажет (info), если скрипт читает `volume` свечи и не смотрит на `market.hasVolume`: `code-volume-unchecked`.
+- Вход перед закрытием бара: `if (time.barLeft() <= params.enterSec) { ... }`. Помни, что `update` идет не чаще раза в ~2 с, точность входа не лучше этого.
+- «Сегодня»: `const from = time.dayStart(); const today = candles.filter((c) => c.time >= from);` (границу считай один раз, не на каждой свече).
+
+## Чего не делать
+
+- `getHours()`, `getDay()`, `getTimezoneOffset()` и `Date.now()` или `new Date()` в сравнении с `time` свечи: часы и пояс устройства. Линтер: `code-device-clock`. Разницу двух `Date.now()` для троттлинга линтер не трогает. `getUTCHours()` тоже не трогает, но это UTC, а не пояс шкалы: бери `time.hour(t)`.
+- Определять таймфрейм по разнице `time` соседних свечей или собирать его имя из секунд: есть `time.tf` и `time.tfName`.
+- Угадывать актив по форме котировок или числу знаков: есть `market.pair` и `market.digits`.
+- Копировать `market.payout` или `time.now()` в переменную в `init`: значения устареют.
+
+## В проверке кода
+
+Smoke-тест подставляет OTC-пару EUR/USD с доходностью 82, таймфрейм 60, `now()` равен времени последней синтетической свечи, пояс UTC. Скрипт с любыми фильтрами по сессии и доходности обязан проходить проверку без ошибок: не бросай, если фильтр закрыт, а возвращай `[]`.
+
+Пример целиком: https://binoview.io/docs/scripts/examples/session-filter.md.
+
+
+---
+<!-- https://binoview.io/docs/scripts/timeframes.md -->
+
+# Другие таймфреймы: meta.timeframes и ctx.bars
+
+> Источник правды: app/utils/tw-scripts/timeframes.js (resolveTimeframes, indexAt, createBarsApi), app/composables/useTfBars.js (история и живой бар), app/composables/useChartScripts.js (загрузка до инстанса), app/utils/tw-scripts/smokeTest.js (синтетика), shared/chartTfs.js (сетка). Версия рантайма: 14.
+
+Скрипт получает родные свечи той же пары на других таймфреймах: тренд по EMA на M15 для входов на M1, уровни часа, младший S5 для точного входа. Свертка из свечей графика не нужна: она ломалась на секундных графиках и перерисовывала сигналы.
+
+## meta.timeframes
+
+Нужные скрипту таймфреймы, до трех: массив имен сетки или секунд, скаляр (`"M15"` это `["M15"]`) либо функция `(params) => [...]`, если таймфрейм задает трейдер.
+
+```javascript
+export const meta = {
+  name: "Тренд старшего ТФ",
+  timeframes: ["M15"],                 // или [900], или (p) => [p.trendTf]
+  defaultParams: { trendTf: "M15" },
+  paramMeta: { trendTf: { label: "ТФ тренда", type: "select", options: ["M5", "M15", "M30", "H1"] } }
+};
+```
+
+Сетка: `S5` 5, `S10` 10, `S15` 15, `S30` 30, `M1` 60, `M2` 120, `M3` 180, `M5` 300, `M10` 600, `M15` 900, `M30` 1800, `H1` 3600; у части брокеров еще `M4` 240 и `H4` 14400. Имя и секунды равнозначны. Таймфрейм графика указывать можно.
+
+Инстанс создается, когда история всех объявленных таймфреймов загружена: ветки «данных еще нет» не нужно. Незадекларированный таймфрейм в `bars(tf)` бросает ошибку с готовой строкой для meta. Таймфрейм вне сетки брокера: ошибка init с перечнем доступных. Не загрузилась история (сеть): скрипт ждет со значком предупреждения, повтор идет сам.
+
+## ctx.bars(tf)
+
+Массив свечей `{ time, open, high, low, close, volume }` таймфрейма `tf`, тот же формат, что `candles` в `update`: до 1050 закрытых баров плюс формирующийся последним элементом, если его первый тик уже пришел. `time` это unix-секунды начала бара. Массив только для чтения (заморожен), снимок на каждый `update`: читай его в начале `update`, не копируй в `init`.
+
+- `bars("M15")` и `bars(900)` это один массив. Для tf графика это те же свечи, что пришли в `update`.
+- `bars(tf).at(-1)` формирующийся бар: close и тени меняются до закрытия. Решения только по `indexAt`.
+- Прогрев индикаторов тот же: `null` и `isStable` у TA. `meta.minBars` считает только свечи графика; длина `bars(tf)` не гарантирована (новая пара, младший таймфрейм).
+
+## ctx.bars.indexAt(tf, t)
+
+Индекс последнего бара `tf`, ЗАКРЫТОГО к моменту `t` (`bar.time + секунды tf <= t`), или -1, если такого нет. Двоичный поиск. Для свечи графика `c` зови `indexAt(tf, c.time)`: бар старшего таймфрейма, в который попадает сама свеча, еще не закрыт и не считается, поэтому расчет на истории и вживую совпадает, сигнал не перерисуется, а подтверждение бота на закрытии видит тот же бар, что форминг-сигнал. Цена: M15, закрывшийся вместе с M1 (08:30 в 08:45:00), виден со свечи 08:45.
+
+Бар, содержащий `t` (в том числе формирующийся), это `bars(tf)[j + 1]`, если он есть: «текущий бар H1 пока зеленый»; на сигналах он перерисовывает.
+
+## Что делать
+
+- Индикатор по другому таймфрейму считай одной точкой на КАЖДЫЙ его бар, чтобы индекс из `indexAt` подходил к массиву индикатора: `for (const b of htf) { const v = ema.add(b.close); dirs.push(ema.isStable ? Math.sign(b.close - v) : 0); }`. Идиома `if (!ema.isStable) continue` здесь не годится: массив короче, индексы съедут (code-bars-compacted).
+- В цикле по свечам: `const j = bars.indexAt(params.trendTf, c.time); const dir = j < 0 ? 0 : dirs[j];`, проверка `j < 0` обязательна.
+- Таймфрейм как параметр: `type: "select"` с `options` из сетки и `timeframes: (p) => [p.trendTf]`; смена пересоздает инстанс.
+- Серия по старшему таймфрейму на графике: по одной точке на свечу графика, `value` по `indexAt`; точки на временах другого таймфрейма на шкалу не лягут.
+- Уровни и зоны: перебирай `bars(tf)` целиком, конец бара `b.time + секунды`.
+- Младший таймфрейм внутри свечи графика `[t, t + time.tf)`: `for (let i = bars.indexAt(tf, t) + 1; i < arr.length && arr[i].time < t + time.tf; i++)`. Его история короче истории графика (1050 S5 это 87 минут против 17.5 часов M1): на ранних свечах баров нет, `indexAt` дает -1 (live-bars-index-miss при промахах больше половины).
+- Объем как у брокера: осмыслен при `ctx.market.hasVolume`.
+
+## Чего не делать
+
+- Сворачивать свечи графика по N баров или по `Math.floor(time / 900)`: на S5 «5 баров» это 25 секунд, а не M5; формирующийся блок перерисовывает сигналы (code-manual-resample).
+- Брать `bars(tf).at(-1)` или `at(-2)` для сигнала: до первого тика последний элемент закрытый, после него формирующийся; сигнал на истории и вживую разойдется. Для сигналов только `indexAt`.
+- Искать бар перебором `find` на каждой свече; считать «j = Math.floor(i / 15)»: бары старшего таймфрейма начинаются раньше истории графика и не с ее границы.
+- Звать `bars(tf)` с таймфреймом вне `meta.timeframes` или объявлять свою переменную `bars` рядом с вызовом (code-bars-shadowed).
+- Ждать бары другой пары: только пара графика. D1 и W1 в сетке нет: суточные уровни считай через `time.dayStart` по H1.
+
+## В проверке кода
+
+Smoke-тест подставляет для каждого объявленного таймфрейма синтетику по его сетке: столько же баров, сколько свечей графика, последний в бакете последней свечи, с «тиком». Живой прогон грузит объявленные таймфреймы пары перед запуском (сводка «Другие ТФ»); не загрузились: прогон пропущен, сохранение открыто. Функция `timeframes` прогоняется на значениях select-параметров.
+
+Замечания: `meta-timeframes-invalid` не массив, не скаляр и не функция; `meta-timeframes-unknown` не из сетки; `meta-timeframes-too-many` больше трех; `meta-timeframes-duplicate` warn, «M15» и 900 вместе; `meta-timeframes-option` значение select дает невалидный timeframes; `code-bars-not-declared` литерал в `bars("M15")` без объявления, в тексте строка для meta; `code-bars-shadowed` warn; `code-timeframe-unused` info, объявлен, но не зовется; `code-bars-compacted` info; `code-manual-resample` info, своя свертка; `live-bars-index-miss` warn.
+
+Примеры: https://binoview.io/docs/scripts/examples/mtf-trend.md (три ТФ как select, голоса трендов по закрытым барам, линии EMA на шкале графика, доска в HUD), https://binoview.io/docs/scripts/examples/mtf-inside.md (младший ТФ внутри свечи).
+
+
+---
+<!-- https://binoview.io/docs/scripts/lint.md -->
+
+# Проверка кода
+
+> Источник правды: app/composables/useScriptCompile.js, app/utils/tw-scripts/smokeTest.js, shared/scriptCodeLinter.js, shared/scriptMetaValidator.js, app/utils/tw-scripts/timeframes.js, i18n/locales/ru.json (тексты замечаний). Версия рантайма: 14.
+
+Конвейер кнопки «Проверить», фазы, коды замечаний, как читать ошибку.
+
+## Конвейер по кнопке «Проверить»
+
+1. Статические запреты и компиляция (`compileUserScript`): ошибка блокирует.
+2. Smoke-тест на синтетике (`runSmokeTest`), затем живой прогон на свечах графика (`runLiveTest`): ошибка блокирует.
+3. `validateMeta`, `validateHud`, линтер `validateCode`, замечания живого прогона: под редактором, уровни error, warn, info; сохранение не блокируют.
+
+## Smoke-тест
+
+Окружение: моки chart и серий (`series.data()` пустой), `params` равны defaultParams, `isDark.value` false, `paneIndex` 1 для separate, `hud.set` запоминает state, `hud.on`/`hud.off` пустые, `market` OTC EUR/USD, доходность 82, `time.tf` 60, UTC.
+
+Данные: 200 синтетических свечей с шагом 60 с по сетке ТФ, цена около 1.0; при `meta.minBars` больше 200 свечей столько, сколько объявлено (до 1050). Каждый таймфрейм из `meta.timeframes`: столько же баров по его сетке для `ctx.bars`.
+
+Фазы (имя фазы в квадратных скобках в начале ошибки):
+
+1. «Запуск init()»: init(ctx) бросил, не вернул объект с update, `meta.minBars`, `meta.cooldown` или `meta.timeframes` невалиден.
+2. «Первый прогон update() на N свечах».
+3. «Повторный update() (имитация тика)»: у последней свечи изменен close.
+4. «Рендер HUD»: `render(lastState, html, { isDark: false })` каждой карточки, только если был `hud.set`.
+5. «Таймаут выполнения»: фаза дольше 1.5 с.
+
+Не проверяет: `paneViews`, `renderer`, `draw` примитивов, `css(p, env)` HUD, `render` без `set`, парковку графика.
+
+## Живой прогон
+
+После синтетики те же фазы на копии свечей графика (до 1050) с его `market` и `time`. Падение: подпись фазы плюс «на живых свечах ПАРА», блокирует. Свечей меньше `meta.minBars` или нет: прогона нет, без ошибки. Сводка: buy и sell из маркеров `update` после `meta.cooldown`, время последнего, мс update.
+
+Замечания live-* (warn), ноль сигналов замечанием не считается: `live-markers-no-name` из `update` вернулись стрелки без `name` buy или sell; `live-markers-not-returned` buy или sell только в `setMarkers`, не в return `update`; `live-signal-flood` сигнал более чем на трети свечей; `live-signals-only-closed` зонды на префиксах истории не дали сигнала на живой свече: цикл до предпоследней свечи или `time` предыдущей; `live-series-nan` NaN, null или Infinity в `value` точек `setData` (точка `{ time }` без value легальна), обычно деление на high минус low, на OTC он бывает 0; `live-series-order` время точек не строго возрастает; `live-update-slow` update дольше 30 мс, идет каждые 2 с на каждом графике; `live-bars-index-miss` `bars.indexAt` вернул -1 больше чем на половине вызовов (timeframes.md).
+
+## Замечания линтера (code-*)
+
+- `code-destroy-in-init-return` warn: init возвращает destroy. Убери, рантайм чистит сам.
+- `code-isDark-as-boolean` warn: isDark в условии без .value.
+- `code-addSeries-no-paneIndex` warn: pane "separate", а у addSeries нет `paneIndex` третьим аргументом.
+- `code-hud-prefix-in-meta` warn: ключ `_hud*` в meta.paramMeta. Параметры HUD клади в hud.paramMeta без префикса.
+- `code-color-default-not-hex` warn: type color, а дефолт не `#RRGGBB`, `#RGB` или `rgba(r,g,b,a)`.
+- `code-ta-arity-mismatch` warn: у `new TA.X(...)` не то число аргументов, индикатор молча даст null; арность в ta.md.
+- `code-p-in-render` warn: в hud.render читается `p` или `params`; render получает (state, html, env), нужное клади в `ctx.hud.set`.
+- `code-init-mutable-state` warn: переменная объявлена в init и мутируется в update (`x++`, `arr.push`). Считай от candles в update.
+- `code-paramMeta-unused` warn: ключ paramMeta нигде не читается: используй `params.key` или убери.
+- `code-hud-on-in-render` error: `hud.on` внутри render. Регистрируй в init один раз.
+- `code-hud-on-no-pointer-events` warn: есть `hud.on`, а `hud.pointerEvents` не "auto". Поставь `pointerEvents: "auto"`.
+- `code-device-clock` warn: `getHours()`, `getDay()`, `getTimezoneOffset()` или `Date.now()` в арифметике с `time` свечи. Бери `ctx.time`.
+- `code-volume-unchecked` info: `volume` без проверки `ctx.market.hasVolume` (на OTC синтетический, у BinoDex 0).
+- Другие таймфреймы (https://binoview.io/docs/scripts/timeframes.md): `code-bars-not-declared` error, `code-bars-shadowed` warn, `code-timeframe-unused`, `code-bars-compacted`, `code-manual-resample` info; валидатор `meta-timeframes-invalid`, `meta-timeframes-unknown`, `meta-timeframes-too-many`, `meta-timeframes-option` error, `meta-timeframes-duplicate` warn.
+
+## Замечания validateMeta
+
+- `meta-not-object` error: meta нет или не объект.
+- `meta-name-missing` warn: пустой name.
+- `meta-pane-invalid` warn: pane не "main" и не "separate".
+- `defaultParams-not-plain-object` error: defaultParams не объект.
+- `paramMeta-not-plain-object` error: paramMeta не объект.
+- `paramMeta-entry-not-object` error: `paramMeta.key` не объект `{ type, label }`.
+- `paramMeta-type-missing` warn: нет type, отрисуется текстовым полем.
+- `paramMeta-type-unknown` warn: неизвестный type; есть number, boolean, switch, color, select, text.
+- `paramMeta-select-no-options` warn: select без options.
+- `paramMeta-label-missing` info: нет label.
+- `paramMeta-labels-long` info: подписи длиннее 32, ключи списком.
+- `paramMeta-key-not-in-defaultParams` info: нет дефолта.
+- `meta-group-label-long`, `meta-groups-too-many` warn, `meta-group-tiny` info: имя раздела длиннее 18, своих разделов больше 6, в разделе меньше 3 ручек.
+
+## Замечания validateHud
+
+- `hud-not-object`, `hud-render-not-function` error: hud не объект или render не функция.
+- `hud-anchor-invalid` (не TR/TL/BR/BL), `hud-offset-not-object`, `hud-pointer-events-invalid` (не "none"/"auto"), `hud-css-invalid`, `hud-visible-invalid`, `hud-fontpx-invalid` warn.
+- `hud-defaultParams-not-plain-object` error; `hud-paramMeta-reserved-prefix` warn: ключ с `_hud`, переименуй; `hud-paramMeta-not-plain-object`, `hud-paramMeta-entry-not-object`, `hud-paramMeta-type-missing`, `hud-paramMeta-type-unknown`, `hud-paramMeta-select-no-options`, `hud-paramMeta-label-missing`, `hud-paramMeta-labels-long`, `hud-paramMeta-key-not-in-defaultParams`: как paramMeta-*.
+- Несколько карточек (hud-cards.md): `hud-too-many-cards`, `hud-card-key-invalid`, `hud-card-not-object`, `hud-card-render-not-function`, `hud-card-param-duplicate` error; `hud-card-label-invalid`, `hud-cards-same-corner`, `hud-mixed-declaration` warn.
+
+Поля-функции `(params, env)` статически не проверяются.
+
+## Как читать ошибку
+
+- `[Sandbox] Доступ запрещен: <имя>` и `[Sandbox] ... в скриптах`: запрещенный API (имя в конце) или статический запрет, список в rules.md.
+- «Unexpected token 'export'»: неподдерживаемая форма export (contract.md); «В модуле не найдены ... meta и init ...»: экспорты названы иначе.
+- «[Запуск init()] init() не вернул объект с update()»: нет `return { update }`.
+- «[Запуск init()] meta.minBars: ожидается число ...»: прогрев не число, отрицательный или больше 1050.
+- На графике ошибка update приходит тостом «Ошибка скрипта: <имя>».
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/ema.md -->
+
+# Пример: EMA
+
+> Файл docs/scripts-api/examples/ema.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "EMA",
+  pane: "main",
+  minBars: (p) => p.period,   // update не зовется, пока свечей меньше периода
+  defaultParams: { period: 20, color: "#2962FF" },
+  paramMeta: {
+    period: { label: "Период", type: "number", min: 2, max: 200 },
+    color:  { label: "Цвет",   type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { addSeries, LineSeries, params, TA } = ctx;
+  const line = addSeries(LineSeries, {
+    color: params.color,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false
+  });
+
+  return {
+    update(candles) {
+      const ema = new TA.EMA(params.period);
+      const data = [];
+      for (const c of candles) {
+        const v = ema.add(c.close);
+        // EMA отдает число с первой же свечи, прогрев виден только через isStable:
+        // без этой проверки первые точки линии будут кривыми.
+        if (!ema.isStable) continue;
+        data.push({ time: c.time, value: v });
+      }
+      line.setData(data);
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/sma-cross.md -->
+
+# Пример: SMA Cross
+
+> Файл docs/scripts-api/examples/sma-cross.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "SMA Cross",
+  pane: "main",
+  minBars: (p) => p.slow + 1,   // медленная SMA плюс предыдущее значение для пересечения
+  cooldown: (p) => p.cooldownBars,   // баров без сигналов после каждого сигнала: одно движение, один сигнал
+  defaultParams: {
+    fast: 9,
+    slow: 21,
+    cooldownBars: 2,
+    fastColor: "#22c55e",
+    slowColor: "#ef4444",
+    buyColor: "#16a34a",
+    sellColor: "#dc2626"
+  },
+  paramMeta: {
+    fast:      { label: "Быстрая SMA",   type: "number", min: 2, max: 100 },
+    slow:      { label: "Медленная SMA", type: "number", min: 3, max: 300 },
+    cooldownBars: { label: "Пауза после сигнала, баров", type: "number", min: 0, max: 50 },
+    fastColor: { label: "Цвет быстрой",  type: "color", group: "style" },
+    slowColor: { label: "Цвет медленной", type: "color", group: "style" },
+    buyColor:  { label: "Цвет BUY",      type: "color", group: "style" },
+    sellColor: { label: "Цвет SELL",     type: "color", group: "style" }
+  }
+};
+
+export function init(ctx) {
+  const { candleSeries, addSeries, LineSeries, params, TA, createSeriesMarkers } = ctx;
+
+  const fastLine = addSeries(LineSeries, { color: params.fastColor, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  const slowLine = addSeries(LineSeries, { color: params.slowColor, lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  const markersApi = createSeriesMarkers(candleSeries, []);
+
+  return {
+    update(candles) {
+      // Индикаторы создаются заново на каждый вызов: update получает весь массив свечей.
+      const fastSMA = new TA.SMA(params.fast);
+      const slowSMA = new TA.SMA(params.slow);
+      const fastData = [], slowData = [], markers = [];
+      let prevFast = null, prevSlow = null;
+
+      for (const c of candles) {
+        const f = fastSMA.add(c.close);   // null, пока не набрался период
+        const s = slowSMA.add(c.close);
+        if (f !== null) fastData.push({ time: c.time, value: f });
+        if (s !== null) slowData.push({ time: c.time, value: s });
+
+        if (f !== null && s !== null && prevFast !== null && prevSlow !== null) {
+          if (prevFast <= prevSlow && f > s) {
+            markers.push({ name: "buy", time: c.time, position: "belowBar", shape: "arrowUp", color: params.buyColor, price: c.low, text: "BUY" });
+          } else if (prevFast >= prevSlow && f < s) {
+            markers.push({ name: "sell", time: c.time, position: "aboveBar", shape: "arrowDown", color: params.sellColor, price: c.high, text: "SELL" });
+          }
+        }
+        if (f !== null) prevFast = f;   // предыдущие значения живут в цикле, не в замыкании init
+        if (s !== null) prevSlow = s;
+      }
+
+      fastLine.setData(fastData);
+      slowLine.setData(slowData);
+      // Пауза meta.cooldown применяется рантаймом и к setMarkers, и к возврату: стрелки в
+      // паузе не рисуются и не звучат, свой счетчик баров не нужен
+      markersApi.setMarkers(markers);   // рисует стрелки на графике
+      return markers;                   // отдает сигналы рантайму: звук, вкладка, бот
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/rsi-signal.md -->
+
+# Пример: RSI Signal Bot
+
+> Файл docs/scripts-api/examples/rsi-signal.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "RSI Signal Bot",
+  pane: "main",
+  minBars: (p) => p.period + 2,   // первое значение RSI и предыдущее к нему
+  defaultParams: {
+    period: 14, oversold: 30, overbought: 70,
+    buyColor: "#16a34a", sellColor: "#ef4444"
+  },
+  paramMeta: {
+    period:     { label: "Период RSI",          type: "number", min: 2, max: 100 },
+    oversold:   { label: "Уровень перепродан.", type: "number", min: 5, max: 49 },
+    overbought: { label: "Уровень перекуплен.", type: "number", min: 51, max: 95 },
+    buyColor:   { label: "Цвет BUY",            type: "color" },
+    sellColor:  { label: "Цвет SELL",           type: "color" }
+  }
+};
+
+// Сигнальный бот без своей серии: индикатор считается, но не рисуется.
+// Выход RSI вверх из зоны перепроданности: BUY. Выход вниз из зоны перекупленности: SELL.
+export function init(ctx) {
+  const { candleSeries, params, createSeriesMarkers, TA } = ctx;
+  const markersApi = createSeriesMarkers(candleSeries, []);
+
+  return {
+    update(candles) {
+      const rsi = new TA.RSI(params.period);
+      const markers = [];
+      let prev = null;
+      for (const c of candles) {
+        const r = rsi.add(c.close);
+        if (r === null) continue;
+        if (prev !== null) {
+          if (prev <= params.oversold && r > params.oversold) {
+            markers.push({
+              name: "buy", time: c.time, position: "belowBar",
+              shape: "arrowUp", color: params.buyColor,
+              price: c.low, text: "BUY (RSI " + r.toFixed(0) + ")"
+            });
+          }
+          if (prev >= params.overbought && r < params.overbought) {
+            markers.push({
+              name: "sell", time: c.time, position: "aboveBar",
+              shape: "arrowDown", color: params.sellColor,
+              price: c.high, text: "SELL (RSI " + r.toFixed(0) + ")"
+            });
+          }
+        }
+        prev = r;
+      }
+      markersApi.setMarkers(markers);
+      return markers;
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/streak-buy.md -->
+
+# Пример: Streak Reversal
+
+> Файл docs/scripts-api/examples/streak-buy.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Streak Reversal",
+  pane: "main",
+  minBars: (p) => p.threshold + 1,   // серия из threshold свечей и разворотная
+  defaultParams: { threshold: 4, buyColor: "#16a34a", sellColor: "#ef4444" },
+  paramMeta: {
+    threshold: { label: "Длина серии", type: "number", min: 2, max: 10 },
+    buyColor:  { label: "Цвет BUY",    type: "color" },
+    sellColor: { label: "Цвет SELL",   type: "color" }
+  }
+};
+
+// Контртрендовая логика без индикаторов: после N красных свечей подряд BUY,
+// после N зеленых подряд SELL. Счетчики серии живут внутри update, не в замыкании init.
+export function init(ctx) {
+  const { candleSeries, params, createSeriesMarkers } = ctx;
+  const markersApi = createSeriesMarkers(candleSeries, []);
+
+  return {
+    update(candles) {
+      const markers = [];
+      let downCount = 0, upCount = 0;
+      for (const c of candles) {
+        if (c.close < c.open) { downCount++; upCount = 0; }
+        else if (c.close > c.open) { upCount++; downCount = 0; }
+        else { downCount = 0; upCount = 0; }
+
+        if (downCount === params.threshold) {
+          markers.push({
+            name: "buy", time: c.time, position: "belowBar",
+            shape: "arrowUp", color: params.buyColor,
+            price: c.low, text: "BUY после " + params.threshold
+          });
+        }
+        if (upCount === params.threshold) {
+          markers.push({
+            name: "sell", time: c.time, position: "aboveBar",
+            shape: "arrowDown", color: params.sellColor,
+            price: c.high, text: "SELL после " + params.threshold
+          });
+        }
+      }
+      markersApi.setMarkers(markers);
+      return markers;
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/rsi.md -->
+
+# Пример: RSI
+
+> Файл docs/scripts-api/examples/rsi.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "RSI",
+  pane: "separate",
+  minBars: (p) => p.period + 1,   // первое значение RSI
+  defaultParams: { period: 14, color: "#a855f7" },
+  paramMeta: {
+    period: { label: "Период", type: "number", min: 2, max: 100 },
+    color:  { label: "Цвет",   type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { addSeries, LineSeries, paneIndex, params, TA } = ctx;
+
+  // paneIndex обязателен для pane: "separate", иначе линия ляжет на свечи.
+  const line = addSeries(LineSeries, {
+    color: params.color,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 }
+  }, paneIndex);
+
+  return {
+    update(candles) {
+      const rsi = new TA.RSI(params.period);
+      const data = [];
+      for (const c of candles) {
+        const v = rsi.add(c.close);
+        if (v !== null) data.push({ time: c.time, value: v });
+      }
+      line.setData(data);
+      return [];   // индикатор без сигналов всегда возвращает пустой массив
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/rsi-hud.md -->
+
+# Пример: RSI Monitor
+
+> Файл docs/scripts-api/examples/rsi-hud.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "RSI Monitor",
+  pane: "separate",
+  minBars: (p) => p.period + 1,   // первое значение RSI
+  // Только параметры индикатора. Позиция и шрифт карточки живут в hud и попадают в настройки сами.
+  defaultParams: { period: 14, color: "#a855f7" },
+  paramMeta: {
+    period: { label: "Период", type: "number", min: 2, max: 100 },
+    color:  { label: "Цвет",   type: "color" }
+  }
+};
+
+export const hud = {
+  anchor: "TR",
+  offset: { top: 5, right: 65, bottom: 45, left: 5 },
+  fontPx: 12,
+
+  // Свои параметры карточки: появятся в секции HUD настроек скрипта.
+  defaultParams: { overbought: 70, oversold: 30 },
+  paramMeta: {
+    overbought: { label: "Перекупленность", type: "number", min: 50, max: 100 },
+    oversold:   { label: "Перепроданность", type: "number", min: 0,  max: 50 }
+  },
+
+  // css как функция (p, env): тема берется из env.isDark в момент создания карточки.
+  // Одна геометрия, две палитры. Размеры в em, чтобы карточка масштабировалась от «Шрифта».
+  css: (p, env) => {
+    const t = env.isDark
+      ? { bg: "rgba(17,24,39,.92)", border: "rgba(148,163,184,.3)", text: "#cbd5e1", label: "#94a3b8",
+          ob: "#ef4444", os: "#22c55e", obBadge: "rgba(239,68,68,.22)", osBadge: "rgba(34,197,94,.22)",
+          obBadgeText: "#fca5a5", osBadgeText: "#86efac", neutral: "rgba(148,163,184,.18)" }
+      : { bg: "rgba(255,255,255,.95)", border: "rgba(15,23,42,.15)", text: "#1e293b", label: "#64748b",
+          ob: "#dc2626", os: "#16a34a", obBadge: "rgba(220,38,38,.15)", osBadge: "rgba(22,163,74,.15)",
+          obBadgeText: "#b91c1c", osBadgeText: "#15803d", neutral: "rgba(100,116,139,.15)" };
+    return `
+      .card { background: ${t.bg}; border: 1px solid ${t.border}; border-radius: 0.6em; padding: 0.4em 0.7em; color: ${t.text}; }
+      .label { color: ${t.label}; font-size: .85em; text-transform: uppercase; letter-spacing: 0.04em; }
+      .value { font-size: 1.6em; font-weight: 700; margin-top: 0.1em; }
+      .value.ob { color: ${t.ob}; }
+      .value.os { color: ${t.os}; }
+      .badge { display: inline-block; padding: 0.1em 0.5em; border-radius: 0.4em; font-size: .85em; font-weight: 700; margin-top: 0.3em; }
+      .badge.ob { background: ${t.obBadge}; color: ${t.obBadgeText}; }
+      .badge.os { background: ${t.osBadge}; color: ${t.osBadgeText}; }
+      .badge.neutral { background: ${t.neutral}; color: ${t.text}; }
+    `;
+  },
+
+  // render получает только state из ctx.hud.set и html-тег с автоэскейпом.
+  render: (s, html) => html`
+    <div class="card">
+      <div class="label">RSI(${s.period})</div>
+      <div class="value ${s.zone}">${s.value}</div>
+      <div class="badge ${s.zone}">${s.zoneLabel}</div>
+    </div>
+  `
+};
+
+export function init(ctx) {
+  const { addSeries, LineSeries, paneIndex, params, TA } = ctx;
+
+  const line = addSeries(LineSeries, {
+    color: params.color,
+    lineWidth: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 }
+  }, paneIndex);
+
+  return {
+    update(candles) {
+      const rsi = new TA.RSI(params.period);
+      const data = [];
+      let last = null;
+      for (const c of candles) {
+        const v = rsi.add(c.close);
+        if (v !== null) {
+          last = v;
+          data.push({ time: c.time, value: v });
+        }
+      }
+      line.setData(data);
+
+      let zone = "neutral", zoneLabel = "FLAT";
+      if (last !== null && last >= params.overbought) { zone = "ob"; zoneLabel = "OVERBOUGHT"; }
+      else if (last !== null && last <= params.oversold) { zone = "os"; zoneLabel = "OVERSOLD"; }
+
+      // Параметры hud доступны через тот же params (без префикса).
+      ctx.hud.set({
+        period: params.period,
+        value: last !== null ? last.toFixed(1) : "n/a",
+        zone,
+        zoneLabel
+      });
+
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/hud-buttons.md -->
+
+# Пример: Счетчик с кнопками
+
+> Файл docs/scripts-api/examples/hud-buttons.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Счетчик с кнопками",
+  pane: "main",
+  minBars: 1,   // без свечей считать нечего
+  defaultParams: {},
+  paramMeta: {}
+};
+
+export const hud = {
+  anchor: "TR",
+  offset: { top: 8, right: 8, bottom: 8, left: 8 },
+  fontPx: 12,
+  // Обязательно для кнопок: без этого клик проваливается на график.
+  pointerEvents: "auto",
+  css: `
+    .card { background: rgba(17,24,39,.9); border-radius: 0.8em; padding: 0.6em 0.9em;
+            color: #e5e7eb; pointer-events: none; }
+    .card .controls { pointer-events: auto; display: flex; gap: 0.5em; margin-top: 0.5em; }
+    button[data-action] { cursor: pointer; padding: 0.3em 0.7em; border-radius: 0.5em;
+                          border: 1px solid #334155; background: #1e293b; color: #e5e7eb; font: inherit; }
+    button[data-action]:hover { background: #334155; }
+  `,
+  render: (s, html) => html`
+    <div class="card">
+      <div>${s.paused ? "Пауза" : "Активен"}. Ростовых свечей с момента сброса: ${s.ups} из ${s.total}</div>
+      <div class="controls">
+        <button data-action="reset">Сброс</button>
+        <button data-action="pause">${s.paused ? "Продолжить" : "Пауза"}</button>
+      </div>
+    </div>
+  `
+};
+
+export function init(ctx) {
+  // Состояние кнопок живет в замыкании init и меняется ТОЛЬКО в обработчиках.
+  // update его лишь читает: так не срабатывает правило линтера code-init-mutable-state.
+  let baselineTime = 0;
+  let paused = false;
+
+  // Подписки регистрируются один раз в init, не в render.
+  // Время клика по часам брокера (ctx.time.now, unix-секунды) сравнимо со временем свечей.
+  ctx.hud.on("click", '[data-action="reset"]', () => { baselineTime = ctx.time.now(); });
+  ctx.hud.on("click", '[data-action="pause"]', () => { paused = !paused; });
+
+  return {
+    update(candles) {
+      // С хвоста до точки сброса: один проход, без промежуточных массивов.
+      let ups = 0, total = 0;
+      for (let i = candles.length - 1; i >= 0 && candles[i].time >= baselineTime; i--) {
+        total++;
+        if (candles[i].close > candles[i].open) ups++;
+      }
+      ctx.hud.set({ paused, ups, total });
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/hud-cards.md -->
+
+# Пример: Две карточки HUD
+
+> Файл docs/scripts-api/examples/hud-cards.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Две карточки HUD",
+  pane: "main",
+  minBars: (p) => p.period + 1,   // первое значение RSI
+  defaultParams: { period: 14 },
+  paramMeta: { period: { label: "Период RSI", type: "number", min: 2, max: 100 } }
+};
+
+// Несколько карточек: в hud нет своего render, каждое поле это карточка со своим
+// render, углом, css и параметрами. Ключ карточки латиницей (он же ключ в ctx.hud.set),
+// подпись для настроек в label. До четырех карточек. Обе справа сверху друг под другом:
+// слева сверху панель выбора пары, справа снизу переключатель пар, слева снизу бейдж сигнала.
+export const hud = {
+  rsi: {
+    label: "RSI",
+    anchor: "TR",
+    defaultParams: { overbought: 70, oversold: 30 },
+    paramMeta: {
+      overbought: { label: "Перекупленность", type: "number", min: 50, max: 100 },
+      oversold:   { label: "Перепроданность", type: "number", min: 0,  max: 50 }
+    },
+    // css как функция (p, env): p это общий params скрипта, тема из env.isDark
+    css: (p, env) => `
+      .card { background: ${env.isDark ? "rgba(17,24,39,.92)" : "rgba(255,255,255,.95)"}; border: 1px solid rgba(148,163,184,.3); border-radius: 0.6em; padding: 0.4em 0.7em; color: ${env.isDark ? "#cbd5e1" : "#1e293b"}; }
+      .label { color: #94a3b8; font-size: .85em; text-transform: uppercase; letter-spacing: 0.04em; }
+      .value { font-size: 1.6em; font-weight: 700; }
+      .value.ob { color: #ef4444; } .value.os { color: #22c55e; }
+    `,
+    render: (s, html) => html`
+      <div class="card">
+        <div class="label">RSI(${s.period})</div>
+        <div class="value ${s.zone}">${s.value}</div>
+      </div>
+    `
+  },
+  candles: {
+    label: "Свечи",
+    anchor: "TR",
+    offset: { top: 76, right: 12 },   // под карточкой RSI
+    defaultParams: { lookback: 20 },
+    paramMeta: { lookback: { label: "Свечей в окне", type: "number", min: 5, max: 200 } },
+    css: `
+      .card { background: rgba(17,24,39,.92); border: 1px solid rgba(148,163,184,.3); border-radius: 0.6em; padding: 0.4em 0.7em; color: #cbd5e1; }
+      .label { color: #94a3b8; font-size: .85em; text-transform: uppercase; letter-spacing: 0.04em; }
+      .row { display: flex; justify-content: space-between; gap: 1.2em; margin-top: 0.15em; }
+      .up { color: #86efac; } .down { color: #fca5a5; }
+    `,
+    render: (s, html) => html`
+      <div class="card">
+        <div class="label">Свечи за ${s.lookback}</div>
+        <div class="row"><span>Рост</span><span class="up">${s.ups}</span></div>
+        <div class="row"><span>Падение</span><span class="down">${s.downs}</span></div>
+        <div class="row"><span>Подряд</span><span class="${s.streakUp ? "up" : "down"}">${s.streak}</span></div>
+      </div>
+    `
+  }
+};
+
+export function init(ctx) {
+  const { params, TA } = ctx;
+
+  return {
+    update(candles) {
+      // Карточка «RSI»: значение и зона по порогам из настроек карточки
+      const rsi = new TA.RSI(params.period);
+      let value = null;
+      for (const c of candles) value = rsi.add(c.close);
+      const zone = value == null ? "" : value >= params.overbought ? "ob" : value <= params.oversold ? "os" : "";
+
+      // Карточка «Свечи»: рост и падение в окне и серия одинаковых свечей подряд с конца
+      const from = Math.max(0, candles.length - params.lookback);
+      let ups = 0;
+      for (let i = from; i < candles.length; i++) if (candles[i].close > candles[i].open) ups++;
+      const last = candles[candles.length - 1];
+      const lastUp = last.close > last.open;
+      let streak = 0;
+      for (let i = candles.length - 1; i >= 0 && (candles[i].close > candles[i].open) === lastUp; i--) streak++;
+
+      // Один вызов на все карточки: ключи это имена карточек. Карточку, которой нет в
+      // объекте, рантайм не перерисовывает, поэтому set можно звать и по частям.
+      ctx.hud.set({
+        rsi: { period: params.period, value: value == null ? "--" : value.toFixed(1), zone },
+        candles: { lookback: params.lookback, ups, downs: candles.length - from - ups, streakUp: lastUp, streak }
+      });
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/adaptive-bot.md -->
+
+# Пример: Адаптивный сигнальный бот
+
+> Файл docs/scripts-api/examples/adaptive-bot.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Адаптивный сигнальный бот",
+  pane: "main",
+  // Объявление: скрипт сам задает время сделки. В окне запуска бота появится
+  // источник экспирации «Из скрипта».
+  adaptiveExpiration: true,
+  minBars: (p) => Math.max(p.slow, p.atrPeriod) + 1,   // обе SMA, ATR и предыдущие значения
+  defaultParams: {
+    fast: 9,
+    slow: 21,
+    atrPeriod: 14,
+    minExpiry: 60,
+    maxExpiry: 300,
+    sensitivity: 300000,
+    dogons: 2,
+    dogonFactor: 1.5,
+    buyColor: "#16a34a",
+    sellColor: "#ef4444"
+  },
+  paramMeta: {
+    fast:        { label: "Быстрая SMA",           type: "number", min: 2, max: 100 },
+    slow:        { label: "Медленная SMA",         type: "number", min: 5, max: 200 },
+    atrPeriod:   { label: "Период волатильности",  type: "number", min: 2, max: 100 },
+    minExpiry:   { label: "Мин. экспирация, с",    type: "number", min: 5, max: 3600 },
+    maxExpiry:   { label: "Макс. экспирация, с",   type: "number", min: 5, max: 14400 },
+    sensitivity: { label: "Чувствительность",      type: "number", min: 1000, max: 1000000, step: 1000 },
+    dogons:      { label: "Догонов (0 = без)",     type: "number", min: 0, max: 7 },
+    dogonFactor: { label: "Множитель догона",      type: "number", min: 1, max: 5, step: 0.1 },
+    buyColor:    { label: "Цвет BUY",              type: "color", group: "style" },
+    sellColor:   { label: "Цвет SELL",             type: "color", group: "style" }
+  }
+};
+
+// Сигнал: пересечение SMA. Экспирация считается по волатильности (ATR): чем она выше,
+// тем длиннее сделка в рамках min..max. Массив [вход, догон, догон]: его длина задает,
+// сколько догонов разрешает скрипт. Лестница работает, когда в боте включено
+// «Перекрывать на той же паре», иначе бот берет только первый элемент.
+export function init(ctx) {
+  const { candleSeries, params, createSeriesMarkers, TA } = ctx;
+  const markersApi = createSeriesMarkers(candleSeries, []);
+
+  function buildExpiration(atr, close) {
+    const volFrac = atr / (close || 1);                       // относительная волатильность
+    const raw = volFrac * params.sensitivity;                 // волатильность в секунды
+    const entry = Math.round(Math.max(params.minExpiry, Math.min(params.maxExpiry, raw)));
+    const dogonSec = Math.round(entry * params.dogonFactor);
+    return [entry, ...Array(params.dogons).fill(dogonSec)];   // длина = догоны + 1
+  }
+
+  return {
+    update(candles) {
+      const fast = new TA.SMA(params.fast);
+      const slow = new TA.SMA(params.slow);
+      const atrInd = new TA.ATR(params.atrPeriod);            // ATR принимает свечу целиком
+      const markers = [];
+      let prevFast = null, prevSlow = null;
+      for (const c of candles) {
+        const f = fast.add(c.close);
+        const s = slow.add(c.close);
+        const atr = atrInd.add(c);
+        if (f !== null && s !== null && prevFast !== null && prevSlow !== null && atr !== null) {
+          if (prevFast <= prevSlow && f > s) {
+            markers.push({
+              name: "buy", time: c.time, position: "belowBar", shape: "arrowUp",
+              color: params.buyColor, price: c.low, text: "BUY",
+              expiration: buildExpiration(atr, c.close)
+            });
+          } else if (prevFast >= prevSlow && f < s) {
+            markers.push({
+              name: "sell", time: c.time, position: "aboveBar", shape: "arrowDown",
+              color: params.sellColor, price: c.high, text: "SELL",
+              expiration: buildExpiration(atr, c.close)
+            });
+          }
+        }
+        if (f !== null) prevFast = f;
+        if (s !== null) prevSlow = s;
+      }
+      markersApi.setMarkers(markers);
+      return markers;
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/macd.md -->
+
+# Пример: MACD
+
+> Файл docs/scripts-api/examples/macd.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "MACD",
+  pane: "separate",
+  minBars: (p) => p.slow + p.signal,   // медленная EMA и ее сглаживание сигнальной линией
+  defaultParams: {
+    fast: 12, slow: 26, signal: 9,
+    macdColor: "#22c55e", signalColor: "#ef4444",
+    upColor: "#22c55e", downColor: "#ef4444"
+  },
+  paramMeta: {
+    fast:        { label: "Быстрая EMA",    type: "number", min: 2, max: 100 },
+    slow:        { label: "Медленная EMA",  type: "number", min: 5, max: 200 },
+    signal:      { label: "Сигнальная EMA", type: "number", min: 2, max: 50 },
+    macdColor:   { label: "Цвет MACD",      type: "color" },
+    signalColor: { label: "Цвет signal",    type: "color" },
+    upColor:     { label: "Цвет роста",     type: "color" },
+    downColor:   { label: "Цвет падения",   type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { addSeries, LineSeries, HistogramSeries, paneIndex, params, TA } = ctx;
+
+  // Без своего priceFormat значения вроде 0.00012 на форексе округлятся до 0.00
+  // унаследованной точностью главной серии.
+  const priceFormat = { type: "price", precision: 5, minMove: 0.00001 };
+
+  const macdLine = addSeries(LineSeries, {
+    color: params.macdColor, lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, priceFormat
+  }, paneIndex);
+  const signalLine = addSeries(LineSeries, {
+    color: params.signalColor, lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, priceFormat
+  }, paneIndex);
+  const hist = addSeries(HistogramSeries, {
+    priceLineVisible: false, lastValueVisible: false, base: 0, priceFormat
+  }, paneIndex);
+
+  // Все три серии на одной шкале панели, отступы задаются один раз.
+  macdLine.priceScale().applyOptions({ autoScale: true, scaleMargins: { top: 0.1, bottom: 0.1 } });
+
+  return {
+    update(candles) {
+      // MACD принимает три экземпляра скользящих.
+      const macd = new TA.MACD(new TA.EMA(params.fast), new TA.EMA(params.slow), new TA.EMA(params.signal));
+      const macdData = [], signalData = [], histData = [];
+      for (const c of candles) {
+        const r = macd.add(c.close);       // { macd, signal, histogram } или null
+        if (r === null) continue;
+        macdData.push({ time: c.time, value: r.macd });
+        signalData.push({ time: c.time, value: r.signal });
+        histData.push({ time: c.time, value: r.histogram, color: r.histogram >= 0 ? params.upColor : params.downColor });
+      }
+      macdLine.setData(macdData);
+      signalLine.setData(signalData);
+      hist.setData(histData);
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/bollinger.md -->
+
+# Пример: Bollinger Bands
+
+> Файл docs/scripts-api/examples/bollinger.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Bollinger Bands",
+  pane: "main",
+  minBars: (p) => p.period,
+  defaultParams: {
+    period: 20, stdDev: 2,
+    upperColor: "#2196F3", middleColor: "#FF9800", lowerColor: "#2196F3"
+  },
+  paramMeta: {
+    period:      { label: "Период",          type: "number", min: 5, max: 100 },
+    stdDev:      { label: "Отклонение",      type: "number", min: 0.5, max: 5, step: 0.1 },
+    upperColor:  { label: "Верхняя линия",   type: "color" },
+    middleColor: { label: "Средняя линия",   type: "color" },
+    lowerColor:  { label: "Нижняя линия",    type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { addSeries, LineSeries, params, TA } = ctx;
+  // lineStyle: 2 это пунктир (0 сплошная, 1 точки, 2 пунктир, 3 крупный пунктир, 4 редкие точки).
+  const upper  = addSeries(LineSeries, { color: params.upperColor,  lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  const middle = addSeries(LineSeries, { color: params.middleColor, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  const lower  = addSeries(LineSeries, { color: params.lowerColor,  lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+
+  return {
+    update(candles) {
+      const bb = new TA.BollingerBands(params.period, params.stdDev);
+      const upperData = [], middleData = [], lowerData = [];
+      for (const c of candles) {
+        const r = bb.add(c.close);         // { upper, middle, lower } или null
+        if (r === null) continue;
+        upperData.push({ time: c.time, value: r.upper });
+        middleData.push({ time: c.time, value: r.middle });
+        lowerData.push({ time: c.time, value: r.lower });
+      }
+      upper.setData(upperData);
+      middle.setData(middleData);
+      lower.setData(lowerData);
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/bollinger-fill.md -->
+
+# Пример: Bollinger Bands с заливкой
+
+> Файл docs/scripts-api/examples/bollinger-fill.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+// Заливка между линиями Боллинджера через Pane Primitive: три класса
+// (примитив, view, renderer), как требует lightweight-charts.
+class FillPrimitive {
+  constructor() { this._view = new FillView(); }
+  attached(params) { this._view.attached(params); }
+  detached() { this._view.detached(); }
+  paneViews() { return [this._view]; }
+  updateAllViews() { this._view.update(); }
+  setData(data, fillColor) { this._view.setData(data, fillColor); }
+}
+
+class FillView {
+  constructor() {
+    this._series = null;
+    this._chart = null;
+    this._requestUpdate = null;
+    this._data = [];
+    this._fillColor = "rgba(33,150,243,0.1)";
+    this._renderData = null;
+  }
+  attached({ series, chart, requestUpdate }) {
+    this._series = series;
+    this._chart = chart;
+    this._requestUpdate = requestUpdate;
+  }
+  detached() { this._series = this._chart = this._requestUpdate = null; }
+
+  // Данные приходят из update скрипта (раз в ~2 секунды). requestUpdate говорит
+  // графику, что примитив надо перерисовать.
+  setData(data, fillColor) {
+    this._data = data;
+    if (fillColor) this._fillColor = fillColor;
+    if (this._requestUpdate) this._requestUpdate();
+  }
+
+  // Координаты считаются только здесь. Никаких Map по всем свечам и чтения
+  // series.data(): timeToCoordinate работает напрямую по времени точки.
+  update() {
+    if (!this._chart || !this._series || !this._data.length) { this._renderData = null; return; }
+    const ts = this._chart.timeScale();
+    const points = [];
+    for (const item of this._data) {
+      const x = ts.timeToCoordinate(item.time);
+      const yUpper = this._series.priceToCoordinate(item.upper);
+      const yLower = this._series.priceToCoordinate(item.lower);
+      if (x === null || yUpper === null || yLower === null) continue;   // точка вне видимой области
+      points.push({ x, yUpper, yLower });
+    }
+    this._renderData = { points, fillColor: this._fillColor };
+  }
+  renderer() { return new FillRenderer(this._renderData); }
+  zOrder() { return "bottom"; }   // под свечами
+}
+
+class FillRenderer {
+  constructor(data) { this._data = data; }
+  draw(target) {
+    if (!this._data || this._data.points.length < 2) return;
+    target.useMediaCoordinateSpace((scope) => {
+      const c = scope.context;
+      const { points, fillColor } = this._data;
+      c.save();
+      c.beginPath();
+      c.moveTo(points[0].x, points[0].yUpper);
+      for (let i = 1; i < points.length; i++) c.lineTo(points[i].x, points[i].yUpper);
+      for (let i = points.length - 1; i >= 0; i--) c.lineTo(points[i].x, points[i].yLower);
+      c.closePath();
+      c.fillStyle = fillColor;
+      c.fill();
+      c.restore();
+    });
+  }
+}
+
+export const meta = {
+  name: "Bollinger Bands с заливкой",
+  pane: "main",
+  minBars: (p) => p.period,
+  defaultParams: {
+    period: 20, stdDev: 2,
+    upperColor: "#2196F3", lowerColor: "#2196F3",
+    fillColor: "rgba(33,150,243,0.1)"
+  },
+  paramMeta: {
+    period:     { label: "Период",        type: "number", min: 5, max: 100 },
+    stdDev:     { label: "Отклонение",    type: "number", min: 0.5, max: 5, step: 0.1 },
+    upperColor: { label: "Верхняя линия", type: "color" },
+    lowerColor: { label: "Нижняя линия",  type: "color" },
+    fillColor:  { label: "Заливка",       type: "color" }
+  }
+};
+
+export function init(ctx) {
+  const { candleSeries, addSeries, LineSeries, attachPrimitive, params, TA } = ctx;
+
+  const upper = addSeries(LineSeries, { color: params.upperColor, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+  const lower = addSeries(LineSeries, { color: params.lowerColor, lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false });
+
+  const fill = new FillPrimitive();
+  attachPrimitive(candleSeries, fill);   // рантайм сам снимет примитив при удалении скрипта
+
+  return {
+    update(candles) {
+      const bb = new TA.BollingerBands(params.period, params.stdDev);
+      const upperData = [], lowerData = [], fillData = [];
+      for (const c of candles) {
+        const r = bb.add(c.close);
+        if (r === null) continue;
+        upperData.push({ time: c.time, value: r.upper });
+        lowerData.push({ time: c.time, value: r.lower });
+        fillData.push({ time: c.time, upper: r.upper, lower: r.lower });
+      }
+      upper.setData(upperData);
+      lower.setData(lowerData);
+      fill.setData(fillData, params.fillColor);
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/price-line.md -->
+
+# Пример: Уровень открытия дня
+
+> Файл docs/scripts-api/examples/price-line.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Уровень открытия дня",
+  pane: "main",
+  minBars: 1,
+  defaultParams: { color: "#f59e0b", showLabel: true },
+  paramMeta: {
+    color:     { label: "Цвет уровня",    type: "color" },
+    showLabel: { label: "Подпись на шкале", type: "boolean" }
+  }
+};
+
+// Горизонтальный уровень это createPriceLine у серии свечей, а не своя графика.
+// Линия создается один раз в init, в update только двигается, и только когда
+// цена изменилась (open дня меняется раз в сутки, а update идет каждые ~2 с).
+export function init(ctx) {
+  const { candleSeries, params, time } = ctx;
+
+  const line = candleSeries.createPriceLine({
+    price: 0,
+    color: params.color,
+    lineWidth: 1,
+    lineStyle: 2,
+    axisLabelVisible: params.showLabel,
+    title: "Open"
+  });
+
+  return {
+    update(candles) {
+      // Первая свеча текущих суток в поясе шкалы графика (ctx.time.dayStart): идем с хвоста,
+      // сегодняшних баров мало.
+      const from = time.dayStart(candles.at(-1).time);
+      let i = candles.length - 1;
+      while (i > 0 && candles[i - 1].time >= from) i--;
+      const open = candles[i].open;
+      if (line.options().price !== open) line.applyOptions({ price: open });   // без лишних перерисовок
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/session-filter.md -->
+
+# Пример: EMA Cross по сессии
+
+> Файл docs/scripts-api/examples/session-filter.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "EMA Cross по сессии",
+  pane: "main",
+  minBars: (p) => p.slow + 1,
+  defaultParams: {
+    fast: 9, slow: 21, fromHour: 9, toHour: 18, minPayout: 80, allowOtc: true,
+    buyColor: "#16a34a", sellColor: "#ef4444"
+  },
+  paramMeta: {
+    fast:      { label: "Быстрая EMA",          type: "number",  min: 2, max: 100 },
+    slow:      { label: "Медленная EMA",        type: "number",  min: 3, max: 300 },
+    fromHour:  { label: "Сессия с (час)",       type: "number",  min: 0, max: 23 },
+    toHour:    { label: "Сессия до (час)",      type: "number",  min: 1, max: 24 },
+    minPayout: { label: "Мин. доходность, %",   type: "number",  min: 0, max: 100 },
+    allowOtc:  { label: "Торговать OTC",        type: "boolean" },
+    buyColor:  { label: "Цвет BUY",             type: "color" },
+    sellColor: { label: "Цвет SELL",            type: "color" }
+  }
+};
+
+// Карточка: пара и доходность, таймфрейм и часы брокера, причина, по которой сигналы
+// сейчас не даются. Все значения приходят из ctx.hud.set в update.
+export const hud = {
+  anchor: "TR",
+  css: (p, env) => `
+    .card { display: grid; gap: .3em; padding: .5em .8em; border-radius: .6em;
+            background: ${env.isDark ? "rgba(17,24,39,.92)" : "rgba(255,255,255,.95)"};
+            color: ${env.isDark ? "#cbd5e1" : "#1e293b"}; border: 1px solid rgba(148,163,184,.3); }
+    .row { display: flex; gap: .8em; }
+    .pair { font-weight: 700; }
+    .dim { opacity: .7; }
+    .on { color: #22c55e; }
+    .off { color: #f59e0b; }
+  `,
+  render: (s, html) => html`
+    <div class="card">
+      <div class="row"><span class="pair">${s.pair}</span><span>${s.payout}</span></div>
+      <div class="row dim"><span>${s.tf}</span><span>${s.clock}</span><span>${s.left}</span></div>
+      <div class="row ${s.blocked ? "off" : "on"}">${s.reason}</div>
+    </div>
+  `
+};
+
+// Сигналы на пересечении двух EMA только внутри торговой сессии (часы в поясе шкалы
+// графика, как их видит трейдер), при доходности не ниже порога и, если выключено, не на OTC.
+export function init(ctx) {
+  const { candleSeries, addSeries, LineSeries, params, TA, createSeriesMarkers, market, time, fmt, hud } = ctx;
+  const fastLine = addSeries(LineSeries, { color: "#60a5fa", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  const slowLine = addSeries(LineSeries, { color: "#f59e0b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  const markersApi = createSeriesMarkers(candleSeries, []);
+
+  // Почему сигнал сейчас запрещен; пустая строка = торгуем. t в unix-секундах (time свечи),
+  // payout берется один раз на update: в течение одного прогона он не меняется.
+  function blockReason(t, payout) {
+    const h = time.hour(t);
+    const inSession = params.fromHour < params.toHour
+      ? h >= params.fromHour && h < params.toHour
+      : h >= params.fromHour || h < params.toHour;      // сессия через полночь
+    if (!inSession) return "вне сессии " + params.fromHour + ":00 " + params.toHour + ":00";
+    if (market.otc && !params.allowOtc) return "OTC выключен";
+    if (payout !== null && payout < params.minPayout) return "доходность ниже " + params.minPayout + "%";
+    return "";
+  }
+
+  return {
+    update(candles) {
+      const payout = market.payout;                            // живое значение, снимок на этот прогон
+      const fast = new TA.EMA(params.fast);
+      const slow = new TA.EMA(params.slow);
+      const fastData = [], slowData = [], markers = [];
+      let prevDiff = null;
+      for (const c of candles) {
+        const f = fast.add(c.close);
+        const s = slow.add(c.close);
+        if (!fast.isStable || !slow.isStable) continue;     // прогрев обеих EMA
+        fastData.push({ time: c.time, value: f });
+        slowData.push({ time: c.time, value: s });
+        const diff = f - s;
+        if (prevDiff !== null && diff !== 0 && Math.sign(diff) !== Math.sign(prevDiff) && !blockReason(c.time, payout)) {
+          const up = diff > 0;
+          markers.push({
+            name: up ? "buy" : "sell", time: c.time, price: up ? c.low : c.high,
+            position: up ? "belowBar" : "aboveBar", shape: up ? "arrowUp" : "arrowDown",
+            color: up ? params.buyColor : params.sellColor,
+            text: (up ? "BUY " : "SELL ") + fmt.time(c.time)       // часы пояса графика
+          });
+        }
+        prevDiff = diff;
+      }
+      fastLine.setData(fastData);
+      slowLine.setData(slowData);
+      markersApi.setMarkers(markers);
+
+      const now = time.now();                                  // часы брокера, unix-секунды
+      const reason = blockReason(now, payout);
+      const left = time.barLeft();
+      hud.set({
+        pair: market.label,
+        payout: payout === null ? "" : payout + "%",
+        tf: time.tfName || "",
+        clock: fmt.time(now),
+        left: left === null ? "" : "до закрытия " + left + " с",
+        blocked: reason !== "",
+        reason: reason || "сигналы разрешены"
+      });
+      return markers;
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/volume-guard.md -->
+
+# Пример: OBV с проверкой объема
+
+> Файл docs/scripts-api/examples/volume-guard.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "OBV с проверкой объема",
+  pane: "separate",
+  minBars: 2,
+  defaultParams: { period: 20, color: "#38bdf8" },
+  paramMeta: {
+    period: { label: "Период OBV", type: "number", min: 1, max: 200 },
+    color:  { label: "Цвет",       type: "color" }
+  }
+};
+
+// Карточка: последнее значение OBV или причина, по которой объемной логики нет.
+export const hud = {
+  anchor: "TR",
+  css: (p, env) => `
+    .card { padding: .4em .7em; border-radius: .6em; border: 1px solid rgba(148,163,184,.3);
+            background: ${env.isDark ? "rgba(17,24,39,.92)" : "rgba(255,255,255,.95)"};
+            color: ${env.isDark ? "#cbd5e1" : "#1e293b"}; }
+    .off { color: #f59e0b; }
+  `,
+  render: (s, html) => html`<div class="card ${s.ok ? "" : "off"}">${s.text}</div>`
+};
+
+// Объем осмыслен только при market.hasVolume: у BinoDex его нет вовсе (volume всегда 0), на OTC он
+// синтетический. Пара постоянна для инстанса (смена пары пересоздает скрипт), поэтому текст один раз в init.
+export function init(ctx) {
+  const { addSeries, LineSeries, paneIndex, params, TA, market, hud } = ctx;
+  const line = addSeries(LineSeries, {
+    color: params.color, lineWidth: 2, priceLineVisible: false, lastValueVisible: false
+  }, paneIndex);
+
+  const noVolume = market.hasVolume ? ""
+    : market.otc ? "OTC: объем синтетический, OBV не строится"
+    : "Брокер не дает объем: OBV не строится";
+
+  return {
+    update(candles) {
+      if (noVolume) {
+        hud.set({ ok: false, text: noVolume });
+        return [];
+      }
+      const obv = new TA.OBV(params.period);
+      const data = [];
+      for (const c of candles) {
+        const v = obv.add(c);                              // свеча целиком: OBV читает open и volume
+        if (v !== null) data.push({ time: c.time, value: v });
+      }
+      line.setData(data);
+      const last = data[data.length - 1];
+      hud.set({ ok: true, text: "OBV " + (last ? Math.round(last.value) : "n/a") });
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/mtf-trend.md -->
+
+# Пример: EMA Cross по трем таймфреймам
+
+> Файл docs/scripts-api/examples/mtf-trend.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "EMA Cross по трем таймфреймам",
+  pane: "main",
+  minBars: (p) => p.slow + 1,
+  timeframes: (p) => [p.tf1, p.tf2, p.tf3],   // до трех ТФ, каждый ручка трейдера: ctx.bars(p.tf1) и т.д.
+  defaultParams: {
+    fast: 9, slow: 21, trendEma: 50, agree: 3,
+    tf1: "M5", tf2: "M15", tf3: "H1",
+    buyColor: "#16a34a", sellColor: "#ef4444"
+  },
+  // group: свои разделы настроек, цвета в «Стиль»
+  paramMeta: {
+    fast:      { label: "Быстрая EMA",              type: "number", min: 2, max: 100, group: "Вход" },
+    slow:      { label: "Медленная EMA",            type: "number", min: 3, max: 300, group: "Вход" },
+    agree:     { label: "Сколько ТФ должны совпасть", type: "number", min: 1, max: 3, group: "Вход" },
+    trendEma:  { label: "EMA тренда на каждом ТФ",  type: "number", min: 5, max: 200, group: "Тренд" },
+    tf1:       { label: "ТФ 1",                     type: "select", options: ["M2", "M3", "M5", "M10", "M15"], group: "Тренд" },
+    tf2:       { label: "ТФ 2",                     type: "select", options: ["M5", "M10", "M15", "M30"], group: "Тренд" },
+    tf3:       { label: "ТФ 3",                     type: "select", options: ["M15", "M30", "H1"], group: "Тренд" },
+    buyColor:  { label: "Цвет BUY",                 type: "color" },
+    sellColor: { label: "Цвет SELL",                type: "color" }
+  }
+};
+
+// Доска трендов: строка на каждый ТФ, направление по последнему ЗАКРЫТОМУ бару (по нему сигнал),
+// формирующийся живет по тикам; глубина истории: 1050 H1 это 44 дня, из свечей M1 их не собрать.
+export const hud = {
+  anchor: "TR",
+  css: (p, env) => `
+    .card { display: grid; gap: .35em; padding: .5em .8em; border-radius: .6em; min-width: 19em;
+            background: ${env.isDark ? "rgba(17,24,39,.92)" : "rgba(255,255,255,.95)"};
+            color: ${env.isDark ? "#cbd5e1" : "#1e293b"}; border: 1px solid rgba(148,163,184,.3); }
+    .head { display: flex; justify-content: space-between; font-weight: 700; }
+    .row { display: grid; grid-template-columns: 2.6em 1.2em 1fr 1fr; gap: .5em; align-items: baseline; }
+    .tf { font-weight: 700; }
+    .dim { opacity: .7; font-size: .9em; }
+    .up { color: ${p.buyColor}; }
+    .down { color: ${p.sellColor}; }
+    .flat { color: #f59e0b; }
+  `,
+  render: (s, html) => html`
+    <div class="card">
+      <div class="head"><span>Тренды ${s.up} вверх, ${s.down} вниз</span><span class="${s.allow === "BUY" ? "up" : s.allow === "SELL" ? "down" : "flat"}">${s.allow}</span></div>
+      ${s.rows.map((r) => html`
+        <div class="row">
+          <span class="tf">${r.tf}</span>
+          <span class="${r.dir > 0 ? "up" : r.dir < 0 ? "down" : "flat"}">${r.dir > 0 ? "▲" : r.dir < 0 ? "▼" : "•"}</span>
+          <span class="dim">закрыт ${r.closedAt} EMA ${r.ema}</span>
+          <span class="dim ${r.liveDir > 0 ? "up" : r.liveDir < 0 ? "down" : ""}">живой ${r.liveAt} ${r.liveClose}</span>
+        </div>
+        <div class="row dim"><span></span><span></span><span>${r.count} баров</span><span>с ${r.since}</span></div>
+      `)}
+    </div>
+  `
+};
+
+// Сигнал на пересечении двух EMA на свечах графика, если не меньше `agree` ТФ из трех смотрят в
+// ту же сторону (цена выше EMA тренда на последнем ЗАКРЫТОМ баре ТФ это голос вверх, ниже вниз).
+// EMA каждого ТФ рисуется на шкале графика по одной точке на свечу.
+export function init(ctx) {
+  const { candleSeries, addSeries, LineSeries, params, TA, createSeriesMarkers, bars, fmt, time, hud } = ctx;
+  const tfs = [params.tf1, params.tf2, params.tf3];
+  const palette = ["#a855f7", "#0ea5e9", "#f97316"];
+  const fastLine = addSeries(LineSeries, { color: "#60a5fa", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  const slowLine = addSeries(LineSeries, { color: "#f59e0b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  const trendLines = tfs.map((tf, i) => addSeries(LineSeries, { color: palette[i], lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, title: `EMA ${params.trendEma} ${tf}` }));
+  const markersApi = createSeriesMarkers(candleSeries, []);
+  // Дата в поясе шкалы графика: Date как календарь по UTC-методам
+  const dateOf = (t) => {
+    const d = new Date((t + time.offset(t)) * 1000);
+    return `${String(d.getUTCDate()).padStart(2, "0")}.${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  };
+
+  return {
+    update(candles) {
+      // Тренд каждого ТФ: по одной точке на КАЖДЫЙ его бар, чтобы индекс из indexAt подходил к
+      // dirs и emas. На прогреве точка пустая (0 и null): `if (!ema.isStable) continue` здесь
+      // укоротил бы массив и сдвинул индексы.
+      const trends = tfs.map((tf) => {
+        const arr = bars(tf);
+        const ema = new TA.EMA(params.trendEma);
+        const dirs = [], emas = [];
+        for (const b of arr) {
+          const v = ema.add(b.close);
+          dirs.push(ema.isStable ? Math.sign(b.close - v) : 0);   // 1 вверх, -1 вниз, 0 нет тренда
+          emas.push(ema.isStable ? v : null);
+        }
+        return { tf, arr, dirs, emas };
+      });
+      // Голоса ТФ на момент свечи t: последний бар каждого ТФ, ЗАКРЫТЫЙ к началу свечи. На истории
+      // и вживую это один бар, поэтому сигнал не перерисуется, когда текущий бар ТФ дорисуется.
+      // В начале истории j бывает -1: голоса нет.
+      const votesAt = (t) => trends.map((tr) => {
+        const j = bars.indexAt(tr.tf, t);
+        return j < 0 ? 0 : tr.dirs[j];
+      });
+
+      const fast = new TA.EMA(params.fast);
+      const slow = new TA.EMA(params.slow);
+      const fastData = [], slowData = [], markers = [];
+      const trendData = tfs.map(() => []);
+      let prevDiff = null;
+      for (const c of candles) {
+        trends.forEach((tr, i) => {
+          const j = bars.indexAt(tr.tf, c.time);
+          if (j >= 0 && tr.emas[j] !== null) trendData[i].push({ time: c.time, value: tr.emas[j] });
+        });
+        const f = fast.add(c.close);
+        const s = slow.add(c.close);
+        if (!fast.isStable || !slow.isStable) continue;     // прогрев обеих EMA свечей графика
+        fastData.push({ time: c.time, value: f });
+        slowData.push({ time: c.time, value: s });
+        const diff = f - s;
+        if (prevDiff !== null && diff !== 0 && Math.sign(diff) !== Math.sign(prevDiff)) {
+          const up = diff > 0;
+          const votes = votesAt(c.time).filter((d) => d === (up ? 1 : -1)).length;
+          if (votes >= params.agree) {
+            markers.push({
+              name: up ? "buy" : "sell", time: c.time, price: up ? c.low : c.high,
+              position: up ? "belowBar" : "aboveBar", shape: up ? "arrowUp" : "arrowDown",
+              color: up ? params.buyColor : params.sellColor,
+              text: `${up ? "BUY" : "SELL"} ${votes}/3`
+            });
+          }
+        }
+        prevDiff = diff;
+      }
+      fastLine.setData(fastData);
+      slowLine.setData(slowData);
+      trendLines.forEach((line, i) => line.setData(trendData[i]));
+      markersApi.setMarkers(markers);
+
+      // Доска: закрытый бар (голос), формирующийся bars(tf)[j + 1], глубина
+      const t = candles[candles.length - 1].time;
+      const votes = votesAt(t);
+      const up = votes.filter((d) => d > 0).length;
+      const down = votes.filter((d) => d < 0).length;
+      hud.set({
+        up, down,
+        allow: up >= params.agree ? "BUY" : down >= params.agree ? "SELL" : "ждем",
+        rows: trends.map((tr) => {
+          const j = bars.indexAt(tr.tf, t);
+          const live = tr.arr[j + 1];
+          return {
+            tf: tr.tf,
+            dir: j < 0 ? 0 : tr.dirs[j],
+            closedAt: j < 0 ? "" : fmt.time(tr.arr[j].time),
+            ema: j < 0 || tr.emas[j] === null ? "" : fmt.price(tr.emas[j]),
+            liveAt: live ? fmt.time(live.time) : "",
+            liveClose: live ? fmt.price(live.close) : "",
+            liveDir: live ? Math.sign(live.close - live.open) : 0,
+            count: tr.arr.length,
+            since: tr.arr.length ? dateOf(tr.arr[0].time) : ""
+          };
+        })
+      });
+      return markers;
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/examples/mtf-inside.md -->
+
+# Пример: Младший ТФ внутри свечи
+
+> Файл docs/scripts-api/examples/mtf-inside.js. Проходит компиляцию, линтер без замечаний и smoke-тест (tests/scriptsApiDocs.test.js). Версия рантайма: 14.
+
+Скопируй целиком в редактор скриптов, нажми «Проверить», затем «Создать скрипт».
+
+```javascript
+export const meta = {
+  name: "Младший ТФ внутри свечи",
+  pane: "main",
+  timeframes: ["S5"],   // родные пятисекундные бары той же пары в ctx.bars("S5")
+  defaultParams: { upColor: "#22c55e", downColor: "#ef4444" },
+  paramMeta: {
+    upColor:   { label: "Цвет роста",   type: "color" },
+    downColor: { label: "Цвет падения", type: "color" }
+  }
+};
+
+// Карточка: сколько баров S5 уже легло в формирующуюся свечу графика, сколько из них
+// зеленых и красных, направление последнего, глубина истории S5 (1050 баров это 87 минут:
+// младший ТФ покрывает только хвост истории графика).
+export const hud = {
+  anchor: "TR",
+  css: (p, env) => `
+    .card { display: grid; gap: .3em; padding: .5em .8em; border-radius: .6em;
+            background: ${env.isDark ? "rgba(17,24,39,.92)" : "rgba(255,255,255,.95)"};
+            color: ${env.isDark ? "#cbd5e1" : "#1e293b"}; border: 1px solid rgba(148,163,184,.3); }
+    .row { display: flex; gap: .8em; justify-content: space-between; }
+    .dim { opacity: .7; }
+    .up { color: ${p.upColor}; }
+    .down { color: ${p.downColor}; }
+  `,
+  render: (s, html) => html`
+    <div class="card">
+      <div class="row"><b>S5 в свече ${s.candleAt}</b><span>${s.inside} из ${s.perCandle}</span></div>
+      <div class="row"><span class="up">${s.up} вверх</span><span class="down">${s.down} вниз</span></div>
+      <div class="row dim"><span>последний ${s.lastAt}</span><span class="${s.lastDir > 0 ? "up" : s.lastDir < 0 ? "down" : ""}">${s.lastClose}</span></div>
+      <div class="row dim"><span>${s.count} баров S5</span><span>с ${s.firstAt}</span></div>
+    </div>
+  `
+};
+
+// Бары младшего ТФ внутри свечи графика [t, t + tf): первый это indexAt(tf, t) + 1 (все бары,
+// закрытые к t, лежат раньше), дальше пока time меньше конца свечи. Для истории S5 короче
+// свечей графика, поэтому на ранних свечах баров нет: это норма, не ошибка.
+export function init(ctx) {
+  const { bars, fmt, time, hud } = ctx;
+  const TF = 5;
+  const insideCandle = (t) => {
+    const s5 = bars("S5");
+    const out = [];
+    for (let i = bars.indexAt("S5", t) + 1; i < s5.length && s5[i].time < t + time.tf; i++) out.push(s5[i]);
+    return out;
+  };
+
+  return {
+    update(candles) {
+      const last = candles[candles.length - 1];
+      const inside = insideCandle(last.time);
+      const s5 = bars("S5");
+      const tail = inside[inside.length - 1];
+      hud.set({
+        candleAt: fmt.time(last.time),
+        inside: inside.length,
+        perCandle: time.tf / TF,
+        up: inside.filter((b) => b.close > b.open).length,
+        down: inside.filter((b) => b.close < b.open).length,
+        lastAt: tail ? fmt.time(tail.time, true) : "",
+        lastClose: tail ? fmt.price(tail.close) : "",
+        lastDir: tail ? Math.sign(tail.close - tail.open) : 0,
+        count: s5.length,
+        firstAt: s5.length ? fmt.time(s5[0].time) : ""
+      });
+      return [];
+    }
+  };
+}
+```
+
+
+---
+<!-- https://binoview.io/docs/scripts/changelog.md -->
+
+# Что нового в API скриптов
+
+> Источник правды: app/utils/tw-scripts/runtime.js (RUNTIME_VERSION). Версия рантайма: 14.
+
+Изменения контракта песочницы по датам. Новое сверху.
+
+## 2026-10-26, рантайм 14
+
+- `ctx.market.broker` в нижнем регистре, как в справке: `"po"` или `"binodex"` (раньше приходил код аккаунта `"PO"` / `"BINODEX"`, и сравнение по справке не срабатывало).
+- Новый ключ `ctx.market.hasVolume`: объем свечи осмыслен (у брокера он есть и пара не OTC). У BinoDex объема нет, `volume` всегда 0; на OTC он синтетический. Подсказка линтера `code-volume-no-otc-check` переименована в `code-volume-unchecked` и ждет проверки `hasVolume`. Пример: https://binoview.io/docs/scripts/examples/volume-guard.md. Старые вкладки терминала получат рантайм после обновления страницы.
+- У BinoDex формирующийся бар графика и `ctx.bars(tf)` почти сразу после подписки совпадает со свечой брокера по open и теням уже прошедшей части бара; раньше бар старшего таймфрейма был приблизителен до следующего бара.
+
+## 2026-09-07, рантайм 13
+
+- `meta.timeframes`: свечи других таймфреймов той же пары в `ctx.bars(tf)`. Массив имен или секунд сетки (до трех, `["M15"]`, `[900]`), скаляр или функция `(params) => [...]`; история 1050 родных баров с фида брокера плюс формирующийся бар по тикам второй подписки, инстанс создается после загрузки всех объявленных таймфреймов, без свертки в платформе. `ctx.bars.indexAt(tf, t)`: индекс последнего бара, закрытого к `t`, двоичный поиск, -1 если нет: сигналы по нему не перерисовываются и совпадают с подтверждением бота на закрытии. Таймфрейм графика отдается теми же свечами, что в `update`, другие замороженным снимком. Незадекларированный таймфрейм и таймфрейм вне сетки брокера: ошибка с готовой строкой для meta. Новые коды проверки `meta-timeframes-invalid`, `meta-timeframes-unknown`, `meta-timeframes-too-many`, `meta-timeframes-duplicate`, `meta-timeframes-option`, `code-bars-not-declared`, `code-bars-shadowed`, `code-timeframe-unused`, `code-bars-compacted`, `code-manual-resample`, `live-bars-index-miss`. Проверка кода строит синтетику каждого объявленного таймфрейма, живой прогон грузит их для пары графика. См. https://binoview.io/docs/scripts/timeframes.md, примеры https://binoview.io/docs/scripts/examples/mtf-trend.md (три ТФ) и https://binoview.io/docs/scripts/examples/mtf-inside.md (младший ТФ). Старые вкладки терминала получат рантайм после обновления страницы.
+
+## 2026-09-06, рантайм 12
+
+- Несколько HUD-карточек у одного скрипта: `export const hud = { stats: { render, ... }, rsi: { render, ... } }` без полей одиночной карточки на верхнем уровне, до четырех карточек. `ctx.hud.set({ stats: state, rsi: state })` раздает состояния по именам, `ctx.hud.on` слушает все карточки. Системные ключи `_hud.<card>.anchor` и остальные, в настройках вкладка HUD делится на группы по карточкам, у каждой свой замочек. Одиночная карточка и ее ключи `_hud*` не меняются. Новые коды проверки `hud-too-many-cards`, `hud-card-key-invalid`, `hud-card-not-object`, `hud-card-render-not-function`, `hud-card-label-invalid`, `hud-card-param-duplicate`, `hud-cards-same-corner`, `hud-mixed-declaration`. См. https://binoview.io/docs/scripts/hud-cards.md, пример https://binoview.io/docs/scripts/examples/hud-cards.md.
+
+## 2026-09-05, рантайм 11
+
+- `meta.cooldown`: пауза между сигналами в барах, число или функция `(params) => число`, целое 0..1050 (ошибка в фазе init, как у minBars). После прошедшего сигнала buy или sell следующие N баров сигналов нет: рантайм убирает их и из `setMarkers`, и из возврата `update` с общими якорями на один вызов, поэтому стрелка в паузе не рисуется, не звучит и боту не уходит. Считается по индексам свечей, обе стороны в одной очереди. Проверка кода считает сигналы после паузы. Пример SMA Cross получил параметр «Пауза после сигнала, баров». См. https://binoview.io/docs/scripts/markers.md.
+- Живой прогон: замечание `live-signals-only-closed`, когда на истории сигналы есть, а зонды (свежий инстанс на префиксе свечей до бара с сигналом) не дают сигнала на живой свече: цикл до предпоследней свечи или `time` предыдущей. Паттерн «считай по закрытой, маркер на последнюю» описан в markers.md.
+
+## 2026-09-05, рантайм 10
+
+- Живой прогон больше не считает ноль сигналов замечанием: индикаторы и уровни проходят проверку чисто, число сигналов остается в статус-баре. Вместо этого два замечания по доказательствам: `live-markers-no-name` (из `update` вернулись стрелки без `name` buy или sell) и `live-markers-not-returned` (маркеры buy или sell только в `setMarkers`, из `update` не вернулись). Возврат из `update` не массива (объект вместо `[...]`) теперь падение фазы update: на графике это TypeError на каждом тике. См. https://binoview.io/docs/scripts/markers.md.
+
+## 2026-09-04, рантайм 10
+
+- `meta.minBars`: число или функция `(params) => число`. Пока свечей меньше, рантайм не зовет `update` вовсе (ни рисования, ни сигналов, пустой массив не приходит). Не число или больше 1050 (история графика): ошибка в фазе init. См. https://binoview.io/docs/scripts/contract.md.
+- Проверка кода берет столько синтетических свечей, сколько объявлено в `minBars`, если это больше 200; название фазы называет число.
+- Все примеры объявляют `minBars` вместо гарда на пустой массив; на входе в прогрев рантайм сам очищает серии и маркеры скрипта.
+- Проверка кода после синтетики гоняет скрипт на копии свечей графика с его рынком и временем (живой прогон): сводка сигналов в редакторе, замечания `live-*` (нет сигналов, сигнал слишком часто, NaN или порядок точек в сериях, медленный update), падение на живых свечах блокирует сохранение. См. https://binoview.io/docs/scripts/lint.md.
+
+## 2026-09-04, рантайм 9
+
+- Новые ключи ctx: `market` (пара, OTC, доходность, digits, брокер), `time` (tf, часы брокера, час и день в поясе шкалы графика, начало суток и бара, секунды до закрытия бара), `fmt` (цена по digits, число, время). См. https://binoview.io/docs/scripts/market.md.
+- Линтер: `code-device-clock` warn (часы и пояс устройства вместо `ctx.time`) и `code-volume-no-otc-check` info (volume свечи без проверки `ctx.market.otc`).
+- Проверка кода подставляет рынок и время: OTC-пара EUR/USD, доходность 82, таймфрейм 60, пояс UTC.
+- Пример и шаблон «EMA Cross по сессии»: https://binoview.io/docs/scripts/examples/session-filter.md.
+
+## 2026-09-04, рантайм 8
+
+- Ошибка при обращении к запрещенному API теперь называет его: `[Sandbox] Доступ запрещен: setInterval`. Раньше текст был без имени.
+- Проверка кода (smoke-тест) знает `candleSeries.createPriceLine` и `removePriceLine`: скрипты с горизонтальными уровнями проходят проверку.
+- Опубликована эта справка: https://binoview.io/llms.txt и страницы https://binoview.io/docs/scripts/.
+
+## 2026-05, рантайм 8
+
+- Кнопки в HUD: `ctx.hud.on("click", '[data-action="x"]', handler)` и `ctx.hud.off`. См. https://binoview.io/docs/scripts/hud-buttons.md.
+- Декларативный HUD: `export const hud` вместо Canvas-примитива. См. https://binoview.io/docs/scripts/hud.md.
+- Линтер кода с правилами `code-*`. См. https://binoview.io/docs/scripts/lint.md.
